@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deebai - Chat with me!</title>
+    {% load static %}
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Poppins:wght@700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{% static 'css/conversation.css' %}" />
+    <link
+      rel="icon"
+      type="image/png"
+      href="{% static 'images/favicon.ico' %}"
+    />
+  </head>
+  <body>
+    {% csrf_token %}
+    <nav class="navbar">
+      <h1 class="header">Deebai &mdash; Your Digital Buddy in Surigao</h1>
+    </nav>
+
+    <div class="messages-container" id="messagesContainer">
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState">
+        <div class="image-wrapper">
+          <img
+            src="{% static 'images/no-messages-yet.png' %}"
+            alt="No messages yet"
+            class="empty-state-image"
+          />
+        </div>
+        <p class="empty-state-text">
+          No messages yet! Start chatting with Deebai to begin your
+          conversation.
+        </p>
+      </div>
+    </div>
+
+    <div class="input-container">
+      <button class="delete-button" id="deleteButton">Delete Chat</button>
+      <textarea
+        class="chat-input"
+        id="chatInput"
+        placeholder="Type your message here..."
+        rows="1"
+      ></textarea>
+      <button class="send-button" id="sendButton">➤</button>
+    </div>
+
+    <button class="scroll-top-btn" id="scrollTopBtn">↑</button>
+
+    <script src="{% static 'js/conversation.js' %}"></script>
+    <script src="{% static 'js/chat_handler.js' %}"></script>
+    <script src="{% static 'js/typing_animation.js' %}"></script>
+    <script src="{% static 'js/fun_facts_bubble.js' %}"></script>
+  </body>
+</html>
