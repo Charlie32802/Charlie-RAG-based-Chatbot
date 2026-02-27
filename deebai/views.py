@@ -11,7 +11,7 @@ load_dotenv()
 from django.shortcuts import render
 from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.csrf import csrf_exempt
 
 from .models import ConversationSession, ConversationMessage
 from .timezone_utils import get_philippine_time, get_time_greeting
@@ -262,7 +262,7 @@ def index(request):
     return render(request, 'conversation.html')
 
 
-@csrf_protect
+@csrf_exempt
 @require_http_methods(["POST"])
 def chat_stream_api(request):
     session = None
@@ -337,7 +337,7 @@ def chat_stream_api(request):
         return JsonResponse({'error': ERR_GENERIC}, status=500)
 
 
-@csrf_protect
+@csrf_exempt
 @require_http_methods(["POST"])
 def chat_api(request):
     session = None
@@ -370,7 +370,7 @@ def chat_api(request):
             _processing_sessions.discard(session.session_key)
 
 
-@csrf_protect
+@csrf_exempt
 @require_http_methods(["POST"])
 def load_history_api(request):
     try:
@@ -390,7 +390,7 @@ def load_history_api(request):
         return JsonResponse({'error': 'Failed to load history'}, status=500)
 
 
-@csrf_protect
+@csrf_exempt
 @require_http_methods(["POST"])
 def delete_conversation_api(request):
     try:
