@@ -52,11 +52,6 @@ function adjustLayout() {
     messagesContainer.style.bottom = inputHeight + 'px';
 }
 
-function scrollToBottom() {
-    const messagesContainer = document.getElementById('messagesContainer');
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
 // Load conversation history from database
 async function loadConversationHistory() {
     try {
@@ -87,28 +82,6 @@ async function loadConversationHistory() {
     }
 }
 
-// Convert URLs and emails to clickable links
-function linkify(text) {
-    // Pattern for URLs (http, https, www)
-    const urlPattern = /(\b(https?:\/\/|www\.)[^\s<]+)/gi;
-    
-    // Pattern for email addresses
-    const emailPattern = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi;
-    
-    // First, replace URLs
-    text = text.replace(urlPattern, (url) => {
-        const href = url.startsWith('www.') ? 'https://' + url : url;
-        return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color: #1976d2; text-decoration: underline;">${url}</a>`;
-    });
-    
-    // Then, replace email addresses
-    text = text.replace(emailPattern, (email) => {
-        return `<a href="mailto:${email}" style="color: #1976d2; text-decoration: underline;">${email}</a>`;
-    });
-    
-    return text;
-}
-
 // Add message to UI (without database save)
 function addMessageToUI(content, isUser = false) {
     const messagesContainer = document.getElementById('messagesContainer');
@@ -123,18 +96,16 @@ function addMessageToUI(content, isUser = false) {
     
     const avatarHtml = isUser 
         ? `<div class="message-avatar">
-               <img src="/static/images/user-profile.png" alt="Deebai" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
+               <img src="/static/images/user-profile.png" alt="Charlie" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
            </div>`
         : `<div class="message-avatar">
-               <img src="/static/images/favicon.ico" alt="Deebai" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
+               <img src="/static/images/favicon.ico" alt="Charlie" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
            </div>`;
     
     let displayContent = content;
     if (!isUser) {
-        // First apply bold formatting
         displayContent = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        // Then convert URLs and emails to links
-        displayContent = linkify(displayContent);
+        displayContent = linkifyText(displayContent);
     }
     
     messageDiv.innerHTML = `
