@@ -52,11 +52,6 @@ _request_lock        = AsyncLock()
 
 
 async def _get_tracking_context_redis(message: str):
-    """
-    Primary tracking lookup — queries Redis on Ubuntu server (192.168.168.108).
-    Sub-millisecond response. No SQLite, no RAG, no Ollama for cached hits.
-    Falls back to SQLite if Redis is unavailable.
-    """
     try:
         from .redis_tracking import search_documents as redis_search, redis_available
         if not redis_available():
@@ -64,6 +59,12 @@ async def _get_tracking_context_redis(message: str):
             return await _db_get_tracking_context_sqlite(message)
 
         docs = await asyncio.to_thread(redis_search, message)
+        if not docs:
+            return '', 0
+
+        numbers_in_message = set(re.findall(r'\d+', message))
+        docs = [d for d in docs if str(d.get('pdid', '')) in numbers_in_message]
+
         if not docs:
             return '', 0
 
@@ -107,31 +108,16 @@ async def _get_tracking_context_redis(message: str):
 
 @sync_to_async
 def _db_get_tracking_context_sqlite(message: str):
-    """Fallback tracking lookup — queries local SQLite when Redis is unavailable."""
     from .models import TrackedDocument
     from django.db.models import Q
 
-    tokens = re.findall(r'\w+', message.lower())
+    numbers_in_message = set(re.findall(r'\d+', message))
+    if not numbers_in_message:
+        return '', 0
+
     q = Q()
-
-    for token in tokens:
-        if token.isdigit() and len(token) >= 1:
-            q |= Q(pdid=int(token)) | Q(slug__icontains=token)
-        else:
-            embedded_nums = re.findall(r'\d+', token)
-            for num in embedded_nums:
-                q |= Q(pdid=int(num)) | Q(slug__icontains=num)
-
-    for token in tokens:
-        if len(token) >= 4:
-            q |= (
-                Q(title__icontains=token)
-                | Q(subject__icontains=token)
-                | Q(office__icontains=token)
-                | Q(agency__icontains=token)
-                | Q(document_type__icontains=token)
-                | Q(created_by__icontains=token)
-            )
+    for num in numbers_in_message:
+        q |= Q(pdid=int(num)) | Q(slug__icontains=num)
 
     if not q.children:
         return '', 0
@@ -421,40 +407,24 @@ async def _prepare_chat_context(request, user_message):
 
 
 async def call_ollama(messages):
-    """
-    Call the central LLM Service instead of calling Ollama directly.
-    We pass the combined messages as the prompt.
-    """
     try:
-        # Extract system prompt and user messages
-        system_prompt = next((m['content'] for m in messages if m['role'] == 'system'), None)
-        user_prompt = "\n\n".join(m['content'] for m in messages if m['role'] != 'system')
-
-        payload = {
-            "prompt": user_prompt,
-            "system_prompt": system_prompt,
-            "provider": "ollama"  # Let LLM service handle fallback
-        }
-        
-        # LLM Service URL
-        llm_service_url = os.getenv('LLM_SERVICE_URL', 'http://127.0.0.1:8003')
-
+        payload           = _build_ollama_payload(messages)
+        payload['stream'] = False
         async with httpx.AsyncClient(timeout=httpx.Timeout(OLLAMA_TIMEOUT)) as client:
             response = await client.post(
-                f'{llm_service_url}/api/generate',
+                f'http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat',
                 json=payload,
             )
             response.raise_for_status()
-            raw = response.json().get('response', '').strip()
+            raw = response.json().get('message', {}).get('content', '').strip()
             return _clean_response(raw) or ERR_EMPTY
-            
     except httpx.TimeoutException:
         return ERR_TIMEOUT
     except httpx.RequestError as e:
-        logger.error(f"LLM Service request error: {e}")
+        logger.error(f"Ollama request error: {e}")
         return ERR_CONNECTION
     except Exception as e:
-        logger.error(f"LLM Service error: {e}", exc_info=True)
+        logger.error(f"Ollama error: {e}", exc_info=True)
         return ERR_GENERIC
 
 
