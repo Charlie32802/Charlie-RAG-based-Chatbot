@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_HOST  = os.getenv('OLLAMA_HOST',  '192.168.168.108')
 OLLAMA_PORT  = os.getenv('OLLAMA_PORT',  '11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b-instruct-q6_K')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b-instruct-q5_K_M')
 
 MAX_MESSAGE_LENGTH      = int(os.getenv('MAX_MESSAGE_LENGTH',      2000))
 MAX_HISTORY_MESSAGES    = int(os.getenv('MAX_HISTORY_MESSAGES',    7))
@@ -51,13 +51,67 @@ _last_request_time   = {}
 _request_lock        = AsyncLock()
 
 
+async def _get_tracking_context_redis(message: str):
+    """
+    Primary tracking lookup — queries Redis on Ubuntu server (192.168.168.108).
+    Sub-millisecond response. No SQLite, no RAG, no Ollama for cached hits.
+    Falls back to SQLite if Redis is unavailable.
+    """
+    try:
+        from .redis_tracking import search_documents as redis_search, redis_available
+        if not redis_available():
+            logger.warning("Redis unavailable — falling back to SQLite tracking")
+            return await _db_get_tracking_context_sqlite(message)
+
+        docs = await asyncio.to_thread(redis_search, message)
+        if not docs:
+            return '', 0
+
+        lines = []
+        for doc in docs:
+            status = 'Completed' if doc.get('document_completed_status') else 'In progress'
+            lines.append(f"PDID: {doc.get('pdid', '')}")
+            lines.append(f"Title: {doc.get('title', '')}")
+            lines.append(f"Type: {doc.get('document_type', '')}")
+            lines.append(f"Office: {doc.get('office', '')}")
+            lines.append(f"Agency: {doc.get('agency', '')}")
+            lines.append(f"Subject: {doc.get('subject', '')}")
+            lines.append(f"Status: {status}")
+            if doc.get('current_location') and doc['current_location'] != 'Unknown':
+                lines.append(f"Current location: {doc['current_location']}")
+            if doc.get('last_action'):
+                lines.append(f"Last action: {doc['last_action']}")
+            if doc.get('overall_days_onprocess'):
+                lines.append(f"Days on process: {doc['overall_days_onprocess']}")
+            if doc.get('created_at'):
+                lines.append(f"Filed: {doc['created_at']}")
+            if doc.get('created_by'):
+                lines.append(f"Filed by: {doc['created_by']}")
+            if doc.get('route_count'):
+                lines.append(f"Routing stops: {doc['route_count']}")
+            lines.append("")
+
+        header = (
+            f"TOTAL RECORDS IN THIS RESPONSE: {len(docs)}\n"
+            f"You MUST list ALL {len(docs)} records below. "
+            f"Do not stop early. Do not say there are fewer than {len(docs)}.\n"
+            f"{'─' * 50}\n"
+        )
+        logger.info(f"Tracking: Redis hit — {len(docs)} record(s) matched")
+        return header + '\n'.join(lines).strip(), len(docs)
+
+    except Exception as e:
+        logger.error(f"Redis tracking error: {e} — falling back to SQLite")
+        return await _db_get_tracking_context_sqlite(message)
+
+
 @sync_to_async
-def _db_get_tracking_context(message: str):
+def _db_get_tracking_context_sqlite(message: str):
+    """Fallback tracking lookup — queries local SQLite when Redis is unavailable."""
     from .models import TrackedDocument
     from django.db.models import Q
 
     tokens = re.findall(r'\w+', message.lower())
-
     q = Q()
 
     for token in tokens:
@@ -128,6 +182,7 @@ def _db_get_tracking_context(message: str):
         f"Do not stop early. Do not say there are fewer than {len(docs)}.\n"
         f"{'─' * 50}\n"
     )
+    logger.warning(f"Tracking: SQLite fallback — {len(docs)} record(s) matched")
     return header + '\n'.join(lines).strip(), len(docs)
 
 
@@ -315,7 +370,7 @@ async def _prepare_chat_context(request, user_message):
     )
 
     (tracking_context, tracking_hits), (rag_context, categories, item_count) = await asyncio.gather(
-        _db_get_tracking_context(user_message),
+        _get_tracking_context_redis(user_message),
         get_relevant_context(user_message),
     )
 
@@ -366,24 +421,40 @@ async def _prepare_chat_context(request, user_message):
 
 
 async def call_ollama(messages):
+    """
+    Call the central LLM Service instead of calling Ollama directly.
+    We pass the combined messages as the prompt.
+    """
     try:
-        payload           = _build_ollama_payload(messages)
-        payload['stream'] = False
+        # Extract system prompt and user messages
+        system_prompt = next((m['content'] for m in messages if m['role'] == 'system'), None)
+        user_prompt = "\n\n".join(m['content'] for m in messages if m['role'] != 'system')
+
+        payload = {
+            "prompt": user_prompt,
+            "system_prompt": system_prompt,
+            "provider": "ollama"  # Let LLM service handle fallback
+        }
+        
+        # LLM Service URL
+        llm_service_url = os.getenv('LLM_SERVICE_URL', 'http://127.0.0.1:8003')
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(OLLAMA_TIMEOUT)) as client:
             response = await client.post(
-                f'http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat',
+                f'{llm_service_url}/api/generate',
                 json=payload,
             )
             response.raise_for_status()
-            raw = response.json().get('message', {}).get('content', '').strip()
+            raw = response.json().get('response', '').strip()
             return _clean_response(raw) or ERR_EMPTY
+            
     except httpx.TimeoutException:
         return ERR_TIMEOUT
     except httpx.RequestError as e:
-        logger.error(f"Ollama request error: {e}")
+        logger.error(f"LLM Service request error: {e}")
         return ERR_CONNECTION
     except Exception as e:
-        logger.error(f"Ollama error: {e}", exc_info=True)
+        logger.error(f"LLM Service error: {e}", exc_info=True)
         return ERR_GENERIC
 
 

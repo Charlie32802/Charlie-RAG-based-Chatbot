@@ -90,10 +90,20 @@ SESSION_SAVE_EVERY_REQUEST = True
 RATELIMIT_ENABLE = True
 RATELIMIT_USE_CACHE = 'default'
 
+# ─────────────────────────────────────────────
+# CACHE — Redis on Ubuntu server
+# Document tracking data lives here (in RAM).
+# Falls back gracefully if Redis is unavailable.
+# ─────────────────────────────────────────────
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'charlie-ratelimit',
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://192.168.168.108:6379/0',
+        'OPTIONS': {
+            'socket_connect_timeout': 3,
+            'socket_timeout': 3,
+        },
+        'KEY_PREFIX': 'charlie',
     }
 }
 
