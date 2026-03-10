@@ -1666,3 +1666,121 @@ body.dark .message.search-dim {
 }
 
 .empty-state.hidden .fun-facts-bubble { display: none; }
+
+/* ── High-zoom / extra-narrow input bar (≤ 360px) ────────────────────────── */
+/* Triggered at ~360px effective viewport — e.g. 400% zoom on a 1440px screen */
+@media (max-width: 360px) {
+    .input-container {
+        gap: 5px;
+        padding: 10px 10px;
+    }
+
+    .share-button {
+        padding: 7px 9px;
+        font-size: 0.72rem;
+        gap: 3px;
+        flex-shrink: 1;
+    }
+
+    .delete-button {
+        padding: 7px 9px;
+        font-size: 0.72rem;
+        gap: 3px;
+        flex-shrink: 1;
+    }
+
+    .chat-input {
+        height: 36px;
+        min-width: 0;
+        padding: 8px 10px;
+        font-size: 0.82rem;
+    }
+
+    .send-button {
+        width: 36px;
+        height: 36px;
+        font-size: 14px;
+        flex-shrink: 0;
+    }
+
+    .print-button {
+        width: 36px;
+        height: 36px;
+        flex-shrink: 0;
+    }
+
+    .print-button img {
+        width: 15px;
+        height: 15px;
+    }
+
+    .action-buttons {
+        gap: 5px;
+    }
+}
+
+/* ── Extreme zoom / very narrow input bar (≤ 310px) ──────────────────────── */
+/* Triggered at ~500%+ zoom — collapses Share to icon-only, trims everything  */
+@media (max-width: 310px) {
+    .input-container {
+        gap: 4px;
+        padding: 8px 8px;
+    }
+
+    /* Hide "Share" label, keep the icon only */
+    .share-button {
+        padding: 6px;
+        font-size: 0;
+        width: 30px;
+        height: 30px;
+        min-width: 30px;
+        flex-shrink: 0;
+        justify-content: center;
+    }
+
+    .share-button .share-icon {
+        width: 14px;
+        height: 14px;
+    }
+
+    /* Shrink "Delete Chat" label */
+    .delete-button {
+        padding: 6px 7px;
+        font-size: 0.65rem;
+        flex-shrink: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 72px;
+    }
+
+    .chat-input {
+        height: 30px;
+        min-width: 0;
+        padding: 6px 8px;
+        font-size: 0.78rem;
+    }
+
+    .send-button {
+        width: 30px;
+        height: 30px;
+        font-size: 12px;
+        flex-shrink: 0;
+    }
+
+    .print-button {
+        width: 30px;
+        height: 30px;
+        flex-shrink: 0;
+    }
+
+    .print-button img {
+        width: 13px;
+        height: 13px;
+    }
+
+    .action-buttons {
+        gap: 4px;
+    }
+}
