@@ -472,6 +472,36 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 
+// ── Clipboard helper — works on both HTTPS and plain HTTP ─────────────────
+// navigator.clipboard is only available in secure contexts (HTTPS / localhost).
+// On plain HTTP (LAN access), it is undefined and will throw a silent TypeError.
+// This helper tries the modern API first, then falls back to execCommand.
+function _copyTextToClipboard(text, onSuccess, onFailure) {
+    const execFallback = () => {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity  = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (onSuccess) onSuccess();
+        } catch (e) {
+            console.error('Copy failed:', e);
+            if (onFailure) onFailure(e);
+        }
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(onSuccess).catch(execFallback);
+    } else {
+        execFallback();
+    }
+}
+
 // ── Share modal + print button ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('printButton').addEventListener('click', function () {
@@ -503,7 +533,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
     copyBtn.addEventListener('click', function () {
-        navigator.clipboard.writeText(linkInput.value).then(() => {
+        _copyTextToClipboard(linkInput.value, function () {
             copyBtn.textContent = 'Copied!';
             copyBtn.classList.add('copied');
             setTimeout(() => {
@@ -531,8 +561,10 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     document.getElementById('shareViaInstagram').addEventListener('click', function () {
-        navigator.clipboard.writeText(linkInput.value)
-            .catch(() => {})
-            .finally(() => window.open('https://www.instagram.com/', '_blank'));
+        _copyTextToClipboard(
+            linkInput.value,
+            () => window.open('https://www.instagram.com/', '_blank'),
+            () => window.open('https://www.instagram.com/', '_blank')
+        );
     });
 });

@@ -409,7 +409,8 @@ async function loadConversationHistory() {
 
 // ── Copy message text ──────────────────────────────────────────────────────
 function copyMessageText(bubble, btn) {
-    const text    = bubble.innerText || bubble.textContent;
+    const text = (bubble.innerText || bubble.textContent).trim();
+
     const doConfirm = () => {
         btn.innerHTML = ICON_CHECK;
         btn.setAttribute('data-tip', 'Copied!');
@@ -420,15 +421,29 @@ function copyMessageText(bubble, btn) {
             btn.classList.remove('copied');
         }, 3000);
     };
-    navigator.clipboard.writeText(text.trim()).then(doConfirm).catch(() => {
-        const ta = document.createElement('textarea');
-        ta.value = text.trim();
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        doConfirm();
-    });
+
+    const execFallback = () => {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity  = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            doConfirm();
+        } catch (e) {
+            console.error('Copy failed:', e);
+        }
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(doConfirm).catch(execFallback);
+    } else {
+        execFallback();
+    }
 }
 
 // ── Add message to UI ──────────────────────────────────────────────────────
