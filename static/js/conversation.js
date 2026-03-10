@@ -1,21 +1,19 @@
-// conversation.js — layout, history, edit, pagination, browser-close privacy
+// conversation.js — layout, history, edit, pagination, browser-close privacy,
+//                   dark mode, conversation search
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 const ICON_COPY  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 const ICON_EDIT  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+const ICON_MOON  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+const ICON_SUN   = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 
-// ── Edit history — backed by sessionStorage so it survives F5 ─────────────
-// sessionStorage is cleared automatically when the browser (all tabs) closes.
-// Key format:  editHistory:{messageId}   → JSON array of version strings
-//              editCurrentIdx:{messageId} → number
-
+// ── Edit history — backed by sessionStorage ────────────────────────────────
 function _ehGet(messageId) {
     try {
         const raw = sessionStorage.getItem('editHistory:' + messageId);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
-        // Migrate old format (string[]) to new format ({userText,botText}[])
         if (parsed.length > 0 && typeof parsed[0] === 'string') {
             return parsed.map(s => ({ userText: s, botText: '' }));
         }
@@ -33,7 +31,6 @@ function _eiSet(messageId, idx) {
     try { sessionStorage.setItem('editCurrentIdx:' + messageId, String(idx)); } catch {}
 }
 function _clearAllEditHistory() {
-    // Remove only our edit-history keys so other sessionStorage data is untouched
     const toRemove = [];
     for (let i = 0; i < sessionStorage.length; i++) {
         const k = sessionStorage.key(i);
@@ -66,28 +63,249 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // ── Scroll-to-top button ────────────────────────────────────────────────
     messagesContainer.addEventListener('scroll', function () {
-        if (messagesContainer.scrollTop > 300) {
-            scrollTopBtn.classList.add('show');
-        } else {
-            scrollTopBtn.classList.remove('show');
-        }
+        scrollTopBtn.classList.toggle('show', messagesContainer.scrollTop > 300);
     });
 
     scrollTopBtn.addEventListener('click', function () {
         messagesContainer.scrollTo({ top: 0, behavior: 'smooth' });
     });
 
-    // ── Initialize page (privacy + history load) ────────────────────────────
+    // ── Initialize dark mode, search, page ─────────────────────────────────
+    initDarkMode();
+    initSearch();
     initializePage();
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DARK MODE
+// ══════════════════════════════════════════════════════════════════════════════
+function initDarkMode() {
+    const toggle = document.getElementById('darkModeToggle');
+    const isDark = localStorage.getItem('charlieDarkMode') === 'true';
+
+    // Apply saved preference immediately (before paint)
+    if (isDark) {
+        document.body.classList.add('dark');
+        toggle.innerHTML = ICON_SUN;
+        toggle.setAttribute('title', 'Switch to light mode');
+    } else {
+        toggle.innerHTML = ICON_MOON;
+        toggle.setAttribute('title', 'Switch to dark mode');
+    }
+
+    toggle.addEventListener('click', () => {
+        const nowDark = document.body.classList.toggle('dark');
+        localStorage.setItem('charlieDarkMode', String(nowDark));
+        toggle.innerHTML = nowDark ? ICON_SUN : ICON_MOON;
+        toggle.setAttribute('title', nowDark ? 'Switch to light mode' : 'Switch to dark mode');
+    });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONVERSATION SEARCH
+// ══════════════════════════════════════════════════════════════════════════════
+let _searchMatches    = [];
+let _searchCurrentIdx = -1;
+const _savedBubbleHTML = new Map(); // bubble element → original innerHTML
+
+function _escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Walk text nodes inside an element and wrap term matches with <mark>
+// Returns true if at least one match was found
+function _highlightTextNodes(element, term) {
+    const walker    = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) textNodes.push(node);
+
+    const regex  = new RegExp(_escapeRegex(term), 'gi');
+    let   found  = false;
+
+    textNodes.forEach(textNode => {
+        if (!regex.test(textNode.textContent)) return;
+        regex.lastIndex = 0; // reset after test()
+        found = true;
+        const wrapper = document.createElement('span');
+        wrapper.innerHTML = textNode.textContent.replace(
+            regex,
+            match => `<mark class="search-highlight">${match}</mark>`
+        );
+        textNode.parentNode.replaceChild(wrapper, textNode);
+    });
+
+    return found;
+}
+
+function _clearSearchHighlights() {
+    // Restore every bubble we touched
+    _savedBubbleHTML.forEach((html, bubble) => {
+        bubble.innerHTML = html;
+    });
+    _savedBubbleHTML.clear();
+
+    // Un-dim all messages
+    document.querySelectorAll('#messagesContainer .message.search-dim').forEach(m => {
+        m.classList.remove('search-dim');
+    });
+
+    _searchMatches    = [];
+    _searchCurrentIdx = -1;
+}
+
+function _performSearch(term) {
+    _clearSearchHighlights();
+
+    const counter  = document.getElementById('searchCounter');
+    const prevBtn  = document.getElementById('searchPrev');
+    const nextBtn  = document.getElementById('searchNext');
+
+    if (!term.trim()) {
+        counter.textContent = '';
+        counter.classList.remove('no-results');
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+    }
+
+    const messages = document.querySelectorAll('#messagesContainer .message');
+
+    messages.forEach(msgDiv => {
+        const bubble = msgDiv.querySelector('.message-bubble');
+        if (!bubble) return;
+
+        // Don't search inside an active edit textarea
+        if (bubble.classList.contains('editing')) return;
+
+        _savedBubbleHTML.set(bubble, bubble.innerHTML);
+        const found = _highlightTextNodes(bubble, term);
+
+        if (found) {
+            msgDiv.classList.remove('search-dim');
+        } else {
+            msgDiv.classList.add('search-dim');
+        }
+    });
+
+    // Collect all highlight marks
+    _searchMatches = Array.from(
+        document.querySelectorAll('#messagesContainer mark.search-highlight')
+    );
+
+    if (_searchMatches.length > 0) {
+        _searchCurrentIdx = 0;
+        _activateMatch(0);
+        prevBtn.disabled = false;
+        nextBtn.disabled = false;
+    } else {
+        _searchCurrentIdx = -1;
+        counter.textContent = 'No results';
+        counter.classList.add('no-results');
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+    }
+}
+
+function _activateMatch(idx) {
+    const counter = document.getElementById('searchCounter');
+    _searchMatches.forEach(m => m.classList.remove('active'));
+    if (idx < 0 || idx >= _searchMatches.length) return;
+
+    const match = _searchMatches[idx];
+    match.classList.add('active');
+    match.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    counter.textContent = `${idx + 1} of ${_searchMatches.length}`;
+    counter.classList.remove('no-results');
+}
+
+function openSearch() {
+    const container = document.getElementById('searchBarContainer');
+    const input     = document.getElementById('searchInput');
+    container.classList.add('visible');
+    adjustLayout();
+    // Small delay so the transition plays before focusing
+    setTimeout(() => input.focus(), 50);
+}
+
+function closeSearch() {
+    const container = document.getElementById('searchBarContainer');
+    const input     = document.getElementById('searchInput');
+    container.classList.remove('visible');
+    input.value = '';
+    _clearSearchHighlights();
+    const counter = document.getElementById('searchCounter');
+    if (counter) { counter.textContent = ''; counter.classList.remove('no-results'); }
+    const prevBtn = document.getElementById('searchPrev');
+    const nextBtn = document.getElementById('searchNext');
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
+    adjustLayout();
+}
+
+function initSearch() {
+    const toggleBtn = document.getElementById('searchToggleBtn');
+    const closeBtn  = document.getElementById('searchClose');
+    const prevBtn   = document.getElementById('searchPrev');
+    const nextBtn   = document.getElementById('searchNext');
+    const input     = document.getElementById('searchInput');
+
+    toggleBtn.addEventListener('click', () => {
+        const container = document.getElementById('searchBarContainer');
+        if (container.classList.contains('visible')) {
+            closeSearch();
+        } else {
+            openSearch();
+        }
+    });
+
+    closeBtn.addEventListener('click', closeSearch);
+
+    input.addEventListener('input', () => _performSearch(input.value));
+
+    prevBtn.addEventListener('click', () => {
+        if (_searchMatches.length === 0) return;
+        _searchCurrentIdx = (_searchCurrentIdx - 1 + _searchMatches.length) % _searchMatches.length;
+        _activateMatch(_searchCurrentIdx);
+    });
+
+    nextBtn.addEventListener('click', () => {
+        if (_searchMatches.length === 0) return;
+        _searchCurrentIdx = (_searchCurrentIdx + 1) % _searchMatches.length;
+        _activateMatch(_searchCurrentIdx);
+    });
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (_searchMatches.length === 0) return;
+            if (e.shiftKey) {
+                _searchCurrentIdx = (_searchCurrentIdx - 1 + _searchMatches.length) % _searchMatches.length;
+            } else {
+                _searchCurrentIdx = (_searchCurrentIdx + 1) % _searchMatches.length;
+            }
+            _activateMatch(_searchCurrentIdx);
+        }
+        if (e.key === 'Escape') closeSearch();
+    });
+
+    // Intercept Ctrl+F / Cmd+F
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            // Only intercept if not typing in the chat input
+            if (document.activeElement === document.getElementById('chatInput')) return;
+            e.preventDefault();
+            openSearch();
+        }
+    });
+}
 
 // ── Page initialization with browser-close privacy ────────────────────────
 async function initializePage() {
     const SESSION_FLAG = 'charlieSessionActive';
 
     if (!sessionStorage.getItem(SESSION_FLAG)) {
-        // New browser session (sessionStorage cleared on browser close).
-        // Delete any conversation left from a previous session.
         try {
             await fetch('/api/delete-conversation/', {
                 method: 'POST',
@@ -99,13 +317,10 @@ async function initializePage() {
         } catch (e) {
             console.warn('Could not clear previous session:', e);
         }
-        // Also wipe any edit history that lingered
         _clearAllEditHistory();
     }
 
-    // Mark this tab as active (survives F5 refresh, cleared on browser close)
     sessionStorage.setItem(SESSION_FLAG, 'true');
-
     await loadConversationHistory();
 }
 
@@ -114,8 +329,14 @@ function adjustLayout() {
     const messagesContainer = document.getElementById('messagesContainer');
     const inputContainer    = document.querySelector('.input-container');
     const navbar            = document.querySelector('.navbar');
+    const searchBar         = document.getElementById('searchBarContainer');
 
-    messagesContainer.style.top    = navbar.offsetHeight + 'px';
+    const navHeight    = navbar.offsetHeight;
+    const searchHeight = (searchBar && searchBar.classList.contains('visible'))
+        ? searchBar.offsetHeight
+        : 0;
+
+    messagesContainer.style.top    = (navHeight + searchHeight) + 'px';
     messagesContainer.style.bottom = inputContainer.offsetHeight + 'px';
 }
 
@@ -154,7 +375,7 @@ async function loadConversationHistory() {
                 );
             }
 
-            // Second pass: restore pagination + correct version display for both bubbles
+            // Second pass: restore pagination + correct version display
             const container = document.getElementById('messagesContainer');
             for (const msg of data.messages) {
                 if (msg.role !== 'user' || !msg.id) continue;
@@ -167,7 +388,7 @@ async function loadConversationHistory() {
                     .find(d => d.dataset.messageId === mid);
                 if (!userDiv) continue;
 
-                const ver = versions[idx];
+                const ver        = versions[idx];
                 const userBubble = userDiv.querySelector('.message-bubble');
                 if (userBubble) userBubble.innerHTML = ver.userText;
 
@@ -188,7 +409,7 @@ async function loadConversationHistory() {
 
 // ── Copy message text ──────────────────────────────────────────────────────
 function copyMessageText(bubble, btn) {
-    const text = bubble.innerText || bubble.textContent;
+    const text    = bubble.innerText || bubble.textContent;
     const doConfirm = () => {
         btn.innerHTML = ICON_CHECK;
         btn.setAttribute('data-tip', 'Copied!');
@@ -211,9 +432,6 @@ function copyMessageText(bubble, btn) {
 }
 
 // ── Add message to UI ──────────────────────────────────────────────────────
-// Returns the message div (not the bubble).
-// Pass messageId when the ID is known upfront (history load).
-// For new messages sent live, the ID is set later via dataset after save.
 function addMessageToUI(content, isUser = false, messageId = null) {
     const messagesContainer = document.getElementById('messagesContainer');
     const emptyState        = document.getElementById('emptyState');
@@ -222,8 +440,8 @@ function addMessageToUI(content, isUser = false, messageId = null) {
         emptyState.classList.add('hidden');
     }
 
-    const messageDiv       = document.createElement('div');
-    messageDiv.className   = `message ${isUser ? 'user' : 'bot'}`;
+    const messageDiv     = document.createElement('div');
+    messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
     if (messageId) messageDiv.dataset.messageId = messageId;
 
     const avatarHtml = isUser
@@ -242,7 +460,6 @@ function addMessageToUI(content, isUser = false, messageId = null) {
         displayContent = linkifyText(displayContent);
     }
 
-    // Actions: copy for all, edit only for user
     const actionsHtml = isUser
         ? `<div class="message-actions">
                <button class="message-action-btn copy-btn" data-tip="Copy message">${ICON_COPY}</button>
@@ -263,17 +480,15 @@ function addMessageToUI(content, isUser = false, messageId = null) {
         </div>
     `;
 
-    // Wire up copy button
     const copyBtn = messageDiv.querySelector('.copy-btn');
     const bubble  = messageDiv.querySelector('.message-bubble');
     copyBtn.addEventListener('click', () => copyMessageText(bubble, copyBtn));
 
-    // Wire up edit button (user only) — reads messageId from dataset at click time
     if (isUser) {
         const editBtn = messageDiv.querySelector('.edit-btn');
         editBtn.addEventListener('click', () => {
             const mid = messageDiv.dataset.messageId;
-            if (!mid) return; // message not yet saved, ignore
+            if (!mid) return;
             startEditing(messageDiv, bubble, mid);
         });
     }
@@ -285,23 +500,19 @@ function addMessageToUI(content, isUser = false, messageId = null) {
 
 // ── Edit: start ────────────────────────────────────────────────────────────
 function startEditing(messageDiv, bubble, messageId) {
-    // Prevent double-editing
     if (bubble.classList.contains('editing')) return;
 
     const originalText = (bubble.innerText || bubble.textContent).trim();
     bubble.dataset.originalContent = bubble.innerHTML;
     bubble.dataset.originalText    = originalText;
 
-    // Disable copy + edit buttons while editing
     const copyBtn = messageDiv.querySelector('.copy-btn');
     const editBtn = messageDiv.querySelector('.edit-btn');
     if (copyBtn) copyBtn.disabled = true;
     if (editBtn) editBtn.disabled = true;
 
-    // Lock width only so the bubble doesn't expand/shrink horizontally
     bubble.style.width = bubble.offsetWidth + 'px';
 
-    // Replace bubble content with a textarea
     const textarea     = document.createElement('textarea');
     textarea.className = 'edit-textarea';
     textarea.value     = originalText;
@@ -315,7 +526,6 @@ function startEditing(messageDiv, bubble, messageId) {
     textarea.focus();
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
 
-    // Insert save/cancel row between bubble and meta
     const messageContent = messageDiv.querySelector('.message-content');
     const metaRow        = messageDiv.querySelector('.message-meta');
     const editActions    = document.createElement('div');
@@ -329,9 +539,8 @@ function startEditing(messageDiv, bubble, messageId) {
     const saveBtn   = editActions.querySelector('.edit-save-btn');
     const cancelBtn = editActions.querySelector('.edit-cancel-btn');
 
-    // Enable save only when content actually changed
     textarea.addEventListener('input', () => {
-        const current = textarea.value.trim();
+        const current    = textarea.value.trim();
         saveBtn.disabled = current === originalText || current === '';
     });
 
@@ -349,13 +558,13 @@ function startEditing(messageDiv, bubble, messageId) {
 // ── Edit: auto-resize textarea ─────────────────────────────────────────────
 function autoResizeEditTextarea(textarea) {
     textarea.style.height = 'auto';
-    const maxHeight = 22 * 6; // ~6 lines
+    const maxHeight = 22 * 6;
     if (textarea.scrollHeight > maxHeight) {
-        textarea.style.height      = maxHeight + 'px';
-        textarea.style.overflowY   = 'auto';
+        textarea.style.height    = maxHeight + 'px';
+        textarea.style.overflowY = 'auto';
     } else {
-        textarea.style.height      = textarea.scrollHeight + 'px';
-        textarea.style.overflowY   = 'hidden';
+        textarea.style.height    = textarea.scrollHeight + 'px';
+        textarea.style.overflowY = 'hidden';
     }
 }
 
@@ -368,7 +577,6 @@ function cancelEdit(messageDiv, bubble, editActions) {
     delete bubble.dataset.originalText;
     editActions.remove();
 
-    // Re-enable copy + edit buttons
     const copyBtn = messageDiv.querySelector('.copy-btn');
     const editBtn = messageDiv.querySelector('.edit-btn');
     if (copyBtn) copyBtn.disabled = false;
@@ -394,7 +602,6 @@ async function saveEdit(messageDiv, bubble, editActions, messageId, originalText
 
         if (data.status !== 'success') throw new Error(data.error || 'Save failed');
 
-        // Restore bubble with new text (plain for user messages)
         bubble.innerHTML = newText;
         bubble.classList.remove('editing');
         bubble.style.width = '';
@@ -402,25 +609,20 @@ async function saveEdit(messageDiv, bubble, editActions, messageId, originalText
         delete bubble.dataset.originalText;
         editActions.remove();
 
-        // Re-enable copy + edit buttons
         const copyBtn = messageDiv.querySelector('.copy-btn');
         const editBtn = messageDiv.querySelector('.edit-btn');
         if (copyBtn) copyBtn.disabled = false;
         if (editBtn) editBtn.disabled = false;
 
-        // Track edit history — must capture bot text BEFORE removeMessagesAfter
         const oldBotDiv  = _getNextBotDiv(messageDiv);
         const oldBotHTML = oldBotDiv ? oldBotDiv.querySelector('.message-bubble').innerHTML : '';
         _addToEditHistory(messageDiv, messageId, originalText, newText, oldBotHTML);
 
-        // Remove all messages after this one in the DOM
         removeMessagesAfter(messageDiv);
 
-        // Hide share button (conversation has changed)
         const shareButton = document.getElementById('shareButton');
         if (shareButton) shareButton.classList.remove('visible');
 
-        // Re-trigger Charlie's response via the regenerate endpoint
         if (typeof sendAfterEdit === 'function') {
             await sendAfterEdit(messageId);
         }
@@ -448,17 +650,14 @@ function removeMessagesAfter(messageDiv) {
 function _addToEditHistory(messageDiv, messageId, oldText, newText, oldBotHTML = '') {
     let versions = _ehGet(messageId);
     if (!versions) {
-        // v0 = the original pair before any edit
         versions = [{ userText: oldText, botText: oldBotHTML }];
     }
-    // Latest version — bot text is null until Charlie responds
     versions.push({ userText: newText, botText: null });
     _ehSet(messageId, versions);
     _eiSet(messageId, versions.length - 1);
     _renderPagination(messageDiv, messageId);
 }
 
-// Called by sendAfterEdit once Charlie's response is ready
 function _fillLastBotText(messageId, botHTML) {
     const versions = _ehGet(messageId);
     if (!versions || versions.length === 0) return;
@@ -466,11 +665,10 @@ function _fillLastBotText(messageId, botHTML) {
     _ehSet(messageId, versions);
 }
 
-// Returns the next .message.bot sibling after a user message div
 function _getNextBotDiv(userMsgDiv) {
     const container = document.getElementById('messagesContainer');
-    const all = Array.from(container.querySelectorAll('.message'));
-    const idx = all.indexOf(userMsgDiv);
+    const all       = Array.from(container.querySelectorAll('.message'));
+    const idx       = all.indexOf(userMsgDiv);
     if (idx === -1 || idx + 1 >= all.length) return null;
     const next = all[idx + 1];
     return next.classList.contains('bot') ? next : null;
@@ -483,7 +681,6 @@ function _renderPagination(messageDiv, messageId) {
     const total   = versions.length;
     const current = currentIdx + 1;
 
-    // Remove any existing pagination row for this message
     const existing = messageDiv.querySelector('.edit-pagination');
     if (existing) existing.remove();
 
@@ -496,7 +693,6 @@ function _renderPagination(messageDiv, messageId) {
         <button class="page-next" ${currentIdx === total - 1 ? 'disabled' : ''}>&#8250;</button>
     `;
 
-    // Append after meta row
     const messageContent = messageDiv.querySelector('.message-content');
     messageContent.appendChild(pagination);
 

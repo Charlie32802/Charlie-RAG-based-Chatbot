@@ -492,13 +492,9 @@ document.addEventListener('DOMContentLoaded', function () {
         window.open('https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(linkInput.value), '_blank');
     });
 
-    document.getElementById('shareViaX').addEventListener('click', function () {
-        const text = 'Check out my conversation with Charlie \u2014 Your Digital Buddy in Surigao!';
-        window.open(
-            'https://twitter.com/intent/tweet?url=' + encodeURIComponent(linkInput.value) +
-            '&text=' + encodeURIComponent(text),
-            '_blank'
-        );
+    document.getElementById('shareViaWhatsApp').addEventListener('click', function () {
+        const text = 'Check out my conversation with Charlie \u2014 Your Digital Buddy in Surigao! ' + linkInput.value;
+        window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
     });
 
     document.getElementById('shareViaMessenger').addEventListener('click', function () {
