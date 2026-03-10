@@ -166,6 +166,14 @@ async function sendMessage(message) {
                     return;
                 }
 
+                // ── FIX 1: Capture user_message_id as soon as server emits it  ──
+                // The server now pre-saves the user message and emits its ID as the
+                // FIRST SSE event (before any tokens). This ensures userMsgDiv always
+                // has a messageId so the Edit button works — even if stream is aborted.
+                if (parsed.user_message_id && userMsgDiv) {
+                    userMsgDiv.dataset.messageId = String(parsed.user_message_id);
+                }
+
                 if (parsed.token) {
                     partialText += parsed.token;
                     if (firstToken) {
@@ -180,9 +188,8 @@ async function sendMessage(message) {
 
                 if (parsed.done) {
                     if (botBubble) finalizeStreamedBubble(botBubble);
-                    if (parsed.user_message_id && userMsgDiv) {
-                        userMsgDiv.dataset.messageId = String(parsed.user_message_id);
-                    }
+                    // user_message_id is now set early (above), no need to re-set here.
+                    // bot_message_id still arrives with 'done'.
                     if (parsed.bot_message_id && botMsgDiv) {
                         botMsgDiv.dataset.messageId = String(parsed.bot_message_id);
                     }
@@ -202,7 +209,7 @@ async function sendMessage(message) {
     } catch (err) {
         if (err.name === 'AbortError' || aborted) {
             if (!firstToken && botBubble && partialText.trim()) {
-                // Finalize and save partial response
+                // Charlie had started responding — finalize and save the partial text
                 finalizeStreamedBubble(botBubble);
                 try {
                     const saveRes = await fetch('/api/save-partial/', {
@@ -215,12 +222,21 @@ async function sendMessage(message) {
                         botMsgDiv.dataset.messageId = String(saveData.message_id);
                     }
                 } catch (_) {}
+                // ── FIX 2: Show Share — we have a saved user message + partial bot
+                // response. streamCompleted is false on abort so the finally block
+                // won't call checkAndShowShareButton; we must call it here explicitly.
+                checkAndShowShareButton();
+            } else if (!firstToken && botBubble) {
+                // Tokens arrived but were all whitespace — remove the empty bubble
+                botMsgDiv.remove();
             } else if (firstToken) {
-                // Stopped during typing indicator — clean up with no message
+                // Stopped during the "..." typing indicator before any token arrived.
+                // User message is already saved in DB (pre-saved by server). The typing
+                // indicator is still showing — remove it. No bot bubble exists yet.
                 removeTypingIndicator();
-                if (botMsgDiv) botMsgDiv.remove();
+                // Do NOT call checkAndShowShareButton — no bot response exists yet.
             }
-            // No error shown — user chose to stop
+            // No error message shown — user intentionally chose to stop.
         } else {
             console.error('Stream error:', err);
             removeTypingIndicator();
@@ -239,6 +255,7 @@ async function sendMessage(message) {
         // Re-enable all edit buttons now that Charlie is done
         _enableAllEditButtons();
         chatInput.focus();
+        // Called here for the normal (non-aborted) completion path
         if (streamCompleted) checkAndShowShareButton();
     }
 }
@@ -384,8 +401,16 @@ async function sendAfterEdit(userMsgId) {
                 if (userMsgId && typeof _fillLastBotText === 'function') {
                     _fillLastBotText(userMsgId, botBubble.innerHTML);
                 }
+                // Show share — partial bot response exists for the edited user message
+                checkAndShowShareButton();
+            } else if (!firstToken && botBubble) {
+                // Only whitespace tokens — remove the empty bubble
+                botMsgDiv.remove();
+                if (userMsgId && typeof _fillLastBotText === 'function') {
+                    _fillLastBotText(userMsgId, '');
+                }
             } else {
-                // Stopped during typing indicator — clean up with no message
+                // Stopped during typing indicator — no bot message produced
                 if (firstToken) removeTypingIndicator();
                 if (botMsgDiv) botMsgDiv.remove();
                 if (userMsgId && typeof _fillLastBotText === 'function') {

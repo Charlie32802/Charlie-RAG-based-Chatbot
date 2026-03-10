@@ -274,7 +274,26 @@ def _db_get_messages(session):
     return list(session.messages.all().order_by('-timestamp')[:MAX_HISTORY_MESSAGES])
 
 
-# ── Updated: returns (user_msg_id, bot_msg_id) ────────────────────────────────
+# ── FIX: Pre-save user message so it exists in DB before streaming begins.  ──
+# This guarantees the user message survives a stream abort, and ensures the
+# front-end receives a messageId immediately so the Edit button works even
+# when Charlie's response is stopped partway through.
+@sync_to_async
+def _db_save_user_message(session, user_message):
+    """Save user message immediately at stream start. Returns user_msg.id."""
+    try:
+        session.refresh_from_db()
+    except ConversationSession.DoesNotExist:
+        return None
+    user_msg = ConversationMessage.objects.create(
+        session=session, role='user', content=user_message[:MAX_MESSAGE_LENGTH]
+    )
+    session.message_count = session.messages.count()
+    session.save()
+    return user_msg.id
+
+
+# ── Save both user + bot (used by non-streaming chat_api fallback only) ───────
 @sync_to_async
 def _db_save_message_exchange(session, user_message, bot_response, categories):
     try:
@@ -302,7 +321,7 @@ def _db_save_message_exchange(session, user_message, bot_response, categories):
     return user_msg.id, bot_msg.id
 
 
-# ── New: save only bot response (used after message edit) ─────────────────────
+# ── Save only bot response (used after message edit, and by streaming path) ───
 @sync_to_async
 def _db_save_bot_message_only(session, bot_response, categories):
     try:
@@ -319,6 +338,11 @@ def _db_save_bot_message_only(session, bot_response, categories):
     )
     session.message_count = session.messages.count()
     session.save()
+
+    if session.message_count > MAX_STORED_MESSAGES:
+        for msg in session.messages.all().order_by('-timestamp')[MAX_STORED_MESSAGES:]:
+            msg.delete()
+
     return bot_msg.id
 
 
@@ -342,7 +366,7 @@ def _db_delete_session(session):
     session.delete()
 
 
-# ── New: edit a user message and delete all subsequent messages ───────────────
+# ── Edit a user message and delete all subsequent messages ────────────────────
 @sync_to_async
 def _db_edit_message(session_key, message_id, new_content):
     try:
@@ -367,7 +391,7 @@ def _db_edit_message(session_key, message_id, new_content):
         return False
 
 
-# ── New: get history excluding the most recent user message ───────────────────
+# ── Get history excluding the most recent user message ────────────────────────
 @sync_to_async
 def _db_get_messages_for_regen(session):
     """Returns (history_messages, last_user_content) for regeneration after edit."""
@@ -525,6 +549,14 @@ async def chat_stream_api(request):
         async def event_stream():
             full_response = []
             try:
+                # ── FIX: Save user message FIRST, emit its ID before any tokens.   ──
+                # This means the user message exists in DB even if the stream is      ──
+                # aborted mid-way. The front-end sets userMsgDiv.dataset.messageId    ──
+                # as soon as this event arrives, so Edit works after a stop.          ──
+                user_msg_id = await _db_save_user_message(session, user_message)
+                if user_msg_id:
+                    yield f"data: {json.dumps({'user_message_id': user_msg_id})}\n\n"
+
                 payload           = _build_ollama_payload(messages)
                 payload['stream'] = True
                 url = f'http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat'
@@ -549,11 +581,11 @@ async def chat_stream_api(request):
                 complete_response = (
                     _clean_response(''.join(full_response).strip()) or ERR_EMPTY
                 )
-                # ── Save and return message IDs ──────────────────────────────
-                user_msg_id, bot_msg_id = await _db_save_message_exchange(
-                    session, user_message, complete_response, categories
+                # ── User message already saved above; save bot message only ──────
+                bot_msg_id = await _db_save_bot_message_only(
+                    session, complete_response, categories
                 )
-                yield f"data: {json.dumps({'done': True, 'user_message_id': user_msg_id, 'bot_message_id': bot_msg_id})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'bot_message_id': bot_msg_id})}\n\n"
 
             except httpx.TimeoutException:
                 yield f"data: {json.dumps({'error': ERR_TIMEOUT})}\n\n"
@@ -584,6 +616,7 @@ async def chat_stream_api(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 async def chat_api(request):
+    """Non-streaming fallback. Uses _db_save_message_exchange (saves both at once)."""
     session = None
     try:
         session_key = request.session.session_key or 'unknown'
@@ -647,7 +680,7 @@ async def delete_conversation_api(request):
         return JsonResponse({'error': 'Failed to delete'}, status=500)
 
 
-# ── New: edit a user message and delete all subsequent messages ───────────────
+# ── Edit a user message and delete all subsequent messages ────────────────────
 @csrf_exempt
 @require_http_methods(["POST"])
 async def edit_message_api(request):
@@ -683,7 +716,7 @@ async def edit_message_api(request):
         return JsonResponse({'error': ERR_GENERIC}, status=500)
 
 
-# ── New: regenerate Charlie's response after a message edit ──────────────────
+# ── Regenerate Charlie's response after a message edit ───────────────────────
 @csrf_exempt
 @require_http_methods(["POST"])
 async def regenerate_response_api(request):
@@ -797,13 +830,16 @@ async def regenerate_response_api(request):
         if session:
             _processing_sessions.discard(session.session_key)
         return JsonResponse({'error': ERR_GENERIC}, status=500)
-    
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 async def save_partial_bot_message_api(request):
     try:
         data         = json.loads(request.body)
-        partial_text = data.get('partial_text', '').strip()
+        # Apply the same bullet/spacing cleanup used on full responses so that
+        # partial (stopped) responses are stored with "•" not raw "* " asterisks.
+        partial_text = _clean_response(data.get('partial_text', '').strip())
 
         if not partial_text:
             return JsonResponse({'error': 'No text provided'}, status=400)

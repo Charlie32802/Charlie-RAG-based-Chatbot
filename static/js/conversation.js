@@ -454,10 +454,14 @@ function addMessageToUI(content, isUser = false, messageId = null) {
                     style="width:100%;height:100%;border-radius:50%;object-fit:cover;">
            </div>`;
 
+    // ── FIX: Bot messages must go through the full formatText pipeline       ──
+    // (normalizeText → bold → linkify) so bullet formatting is identical      ──
+    // whether the message arrives via live streaming or history load from DB.  ──
+    // Previously only **bold** was applied here, leaving raw "* " bullets      ──
+    // untouched whenever content was loaded from the database.                 ──
     let displayContent = content;
     if (!isUser) {
-        displayContent = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        displayContent = linkifyText(displayContent);
+        displayContent = formatText(content);
     }
 
     const actionsHtml = isUser
