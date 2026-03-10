@@ -153,38 +153,46 @@ body {
     color: #1B5E20;
 }
 
+/* ── Message meta row (timestamp + actions on same row, opposite sides) ─────── */
+.message-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-top: 5px;
+    padding: 0 2px;
+    gap: 10px;
+    min-width: 80px;
+}
+
+/* Bot: timestamp left → actions right */
+.bot .message-meta {
+    flex-direction: row;
+}
+
+/* User: timestamp right → actions left (row-reverse flips DOM order visually) */
+.user .message-meta {
+    flex-direction: row-reverse;
+}
+
 .message-time {
     font-size: 0.75rem;
     color: #757575;
-    margin-top: 4px;
-    padding: 0 16px;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
-.bot .message-time {
-    text-align: left;
-}
-
-.user .message-time {
-    text-align: right;
-}
-
+/* ── Action buttons (copy + edit) ─────────────────────────────────────────── */
 .message-actions {
     display: flex;
-    gap: 4px;
-    opacity: 0;
-    transition: opacity 0.15s ease;
+    gap: 2px;
     align-items: center;
-    padding: 0 4px;
-    margin-top: 4px;
-}
-
-.message:hover .message-actions {
-    opacity: 1;
+    flex-shrink: 0;
 }
 
 .message-action-btn {
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
     border-radius: 6px;
     border: none;
     background: transparent;
@@ -192,10 +200,17 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #9e9e9e;
-    transition: background 0.15s, color 0.15s;
+    color: #bdbdbd;
+    transition: background 0.15s, color 0.2s;
     flex-shrink: 0;
     padding: 0;
+    position: relative;
+}
+
+.message-action-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
 .message-action-btn:hover {
@@ -203,9 +218,19 @@ body {
     color: #424242;
 }
 
+/* User actions are outside the bubble on white background — keep them dark */
+.user .message-action-btn {
+    color: #bdbdbd;
+}
+
+.user .message-action-btn:hover {
+    background: #f0f0f0;
+    color: #424242;
+}
+
 .message-action-btn svg {
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
     pointer-events: none;
 }
 
@@ -213,14 +238,185 @@ body {
     color: #2E7D32;
 }
 
-.bot .message-actions {
+/* ── Tooltip ──────────────────────────────────────────────────────────────── */
+.message-action-btn::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(33, 33, 33, 0.88);
+    color: #fff;
+    font-size: 0.7rem;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+    padding: 3px 7px;
+    border-radius: 4px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 50;
+}
+
+.message-action-btn:hover::after {
+    opacity: 1;
+}
+
+/* ── Edit textarea (replaces bubble content while editing) ────────────────── */
+.message-bubble.editing {
+    border: 2px solid #4CAF50 !important;
+    background-color: #f9fbe7 !important;
+}
+
+.user .message-bubble.editing {
+    border: 2px solid rgba(255, 255, 255, 0.7) !important;
+    background-color: #1B5E20 !important;
+}
+
+.edit-textarea {
+    display: block;
+    width: 100%;
+    min-height: 24px;
+    max-height: 132px; /* ~6 lines */
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    font-size: 0.95rem;
+    font-family: 'Inter', sans-serif;
+    line-height: 1.5;
+    resize: none;
+    outline: none;
+    overflow-y: auto;
+    background: transparent;
+    color: inherit;
+    white-space: pre-wrap;
+}
+
+.edit-textarea::-webkit-scrollbar {
+    width: 4px;
+}
+
+.edit-textarea::-webkit-scrollbar-thumb {
+    background: #66BB6A;
+    border-radius: 4px;
+}
+
+/* ── Edit save/cancel row ─────────────────────────────────────────────────── */
+.edit-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 5px;
+    padding: 0 2px;
+    width: 100%;
+}
+
+/* For user messages: align buttons to the left (same side as copy/edit) */
+.user .edit-actions {
     justify-content: flex-start;
+    align-self: stretch;
 }
 
-.user .message-actions {
-    justify-content: flex-end;
+.edit-save-btn,
+.edit-cancel-btn {
+    padding: 4px 14px;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: background-color 0.15s;
 }
 
+.edit-save-btn {
+    background-color: #2E7D32;
+    color: #fff;
+}
+
+.edit-save-btn:not(:disabled):hover {
+    background-color: #1B5E20;
+}
+
+.edit-save-btn:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+}
+
+.edit-cancel-btn {
+    background-color: #e0e0e0;
+    color: #424242;
+}
+
+.edit-cancel-btn:hover {
+    background-color: #d0d0d0;
+}
+
+/* ── Edit pagination (< 1/2 >) ────────────────────────────────────────────── */
+.edit-pagination {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 4px;
+    padding: 0 2px;
+    width: 100%;
+}
+
+.user .edit-pagination {
+    justify-content: flex-start;
+    align-self: stretch;
+}
+
+.page-prev,
+.page-next {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0;
+    color: #757575;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+
+.page-prev:not(:disabled):hover,
+.page-next:not(:disabled):hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: #212121;
+}
+
+.page-prev:not(:disabled):active,
+.page-next:not(:disabled):active {
+    animation: pagePulse 0.25s ease-out;
+}
+
+@keyframes pagePulse {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(0.82); }
+    100% { transform: scale(1); }
+}
+
+.page-prev:disabled,
+.page-next:disabled {
+    opacity: 0.28;
+    cursor: not-allowed;
+}
+
+.page-indicator {
+    font-size: 0.72rem;
+    color: #9e9e9e;
+    min-width: 26px;
+    text-align: center;
+    font-family: 'Inter', sans-serif;
+}
+
+/* ── Input container ──────────────────────────────────────────────────────── */
 .input-container {
     position: fixed;
     bottom: 0;
@@ -694,238 +890,7 @@ body {
     }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .typing-dot,
-    .typing-dots-inline .dot {
-        animation: none;
-    }
-
-    .message-bubble.typing::after {
-        animation: none;
-        opacity: 1;
-    }
-
-    .scroll-top-btn {
-        transition: none;
-    }
-
-    .fun-facts-bubble {
-        animation: none;
-    }
-
-    .bubble-cursor {
-        animation: cursorBlink 1.5s infinite;
-    }
-
-    .flag-confetti {
-        animation: flagFallSimple 2s ease-out forwards;
-    }
-
-    @keyframes flagFallSimple {
-        0% { opacity: 1; transform: translate(-50%, -50%); }
-        100% { transform: translate(-50%, calc(-50% + 100vh)); opacity: 0; }
-    }
-}
-
-@media (min-width: 1400px) {
-    .fun-facts-bubble {
-        max-width: calc(40vw - 30px);
-    }
-}
-
-@media (min-width: 1200px) {
-    .input-container {
-        padding: 15px max(20px, calc((100vw - 1200px) / 2));
-    }
-}
-
-@media (max-width: 999px) {
-    .fun-facts-bubble {
-        left: 55%;
-        max-width: calc(45vw - 20px);
-    }
-}
-
-@media (max-width: 768px) {
-    .message {
-        max-width: 70%;
-    }
-
-    .empty-state-image {
-        max-width: 400px;
-        max-height: 50vh;
-    }
-
-    .bot .message-bubble a {
-        text-decoration-thickness: 1.5px;
-    }
-
-    .scroll-top-btn {
-        bottom: 95px;
-        right: 15px;
-        width: 45px;
-        height: 45px;
-    }
-}
-
-@media (min-width: 481px) and (max-width: 768px) {
-    .navbar {
-        height: 65px;
-    }
-
-    .messages-container {
-        top: 65px;
-        bottom: 78px;
-        padding: 18px;
-    }
-
-    .input-container {
-        min-height: 78px;
-        padding: 12px 18px;
-    }
-
-    .chat-input {
-        font-size: 0.88rem;
-    }
-
-    .send-button {
-        width: 42px;
-        height: 42px;
-        font-size: 17px;
-    }
-
-    .print-button {
-        width: 42px;
-        height: 42px;
-    }
-
-    .messages-container::-webkit-scrollbar {
-        width: 9px;
-    }
-}
-
-@media (max-width: 480px) {
-    .navbar {
-        height: 60px;
-        padding: 5px;
-    }
-
-    .messages-container {
-        top: 60px;
-        bottom: 75px;
-        padding: 15px;
-    }
-
-    .input-container {
-        min-height: 75px;
-        padding: 12px 15px;
-        gap: 8px;
-    }
-
-    .chat-input {
-        padding: 10px 14px;
-        font-size: 0.85rem;
-    }
-
-    .send-button {
-        width: 40px;
-        height: 40px;
-        font-size: 16px;
-    }
-
-    .print-button {
-        width: 40px;
-        height: 40px;
-    }
-
-    .scroll-top-btn {
-        bottom: 90px;
-        right: 15px;
-        width: 40px;
-        height: 40px;
-        font-size: 18px;
-    }
-
-    .messages-container::-webkit-scrollbar {
-        width: 8px;
-    }
-
-    .empty-state-image {
-        max-width: 300px;
-        max-height: 45vh;
-    }
-
-    .empty-state-text {
-        font-size: 0.9rem;
-    }
-
-    .modal-title {
-        font-size: 1.2rem;
-    }
-
-    .modal-message {
-        font-size: 0.9rem;
-    }
-
-    .modal-icon {
-        font-size: 40px;
-    }
-
-    .delete-button {
-        padding: 10px 14px;
-        font-size: 0.8rem;
-        gap: 4px;
-    }
-
-    .share-button {
-        padding: 10px 14px;
-        font-size: 0.8rem;
-        gap: 4px;
-    }
-
-    .fun-facts-bubble {
-        top: -8%;
-        left: 50%;
-        transform: translateX(-50%);
-        max-width: calc(100vw - 40px);
-        padding: 8px 12px;
-    }
-
-    .bubble-content {
-        font-size: 0.75rem;
-    }
-
-    @keyframes bubblePulse {
-        0%, 100% { transform: translateX(-50%) scale(1); }
-        50% { transform: translateX(-50%) scale(1.02); }
-    }
-}
-
-@media (max-width: 385px) {
-    .navbar {
-        height: calc(50vh - 1px);
-    }
-
-    .messages-container {
-        display: none;
-    }
-
-    .input-container {
-        height: calc(50vh + 1px);
-        top: calc(50vh - 1px);
-        bottom: auto;
-    }
-
-    .empty-state-image {
-        max-width: 250px;
-        max-height: 40vh;
-    }
-}
-
-.empty-state.hidden .fun-facts-bubble {
-    display: none;
-}
-
+/* ── Share modal ──────────────────────────────────────────────────────────── */
 .share-modal-overlay {
     position: fixed;
     inset: 0;
@@ -1067,55 +1032,7 @@ body {
     border-color: #bbb;
 }
 
-@media (max-width: 480px) {
-    .share-modal-overlay {
-        padding: 12px;
-    }
-
-    .share-modal {
-        padding: 18px 14px 16px;
-        gap: 12px;
-        border-radius: 12px;
-    }
-
-    .share-modal-title {
-        font-size: 1rem;
-    }
-
-    .share-modal-desc {
-        font-size: 0.82rem;
-    }
-
-    .share-link-row {
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .share-link-input {
-        font-size: 0.78rem;
-        padding: 8px 10px;
-        width: 100%;
-    }
-
-    .share-copy-btn {
-        font-size: 0.78rem;
-        padding: 10px 12px;
-        width: 100%;
-        text-align: center;
-    }
-
-    .share-platforms {
-        grid-template-columns: repeat(2, 1fr);
-        gap: 8px;
-    }
-
-    .share-platform-btn {
-        font-size: 0.75rem;
-        padding: 9px 8px;
-        gap: 5px;
-    }
-}
-
+/* ── Print styles ─────────────────────────────────────────────────────────── */
 @page {
     margin: 16px 0;
 }
@@ -1172,7 +1089,278 @@ body {
     .empty-state,
     .delete-button,
     .share-button,
-    .message-actions {
+    .message-actions,
+    .edit-pagination,
+    .edit-actions {
+        display: none !important;
+    }
+}
+
+/* ── Reduced motion ───────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .typing-dot,
+    .typing-dots-inline .dot {
+        animation: none;
+    }
+
+    .message-bubble.typing::after {
+        animation: none;
+        opacity: 1;
+    }
+
+    .scroll-top-btn {
+        transition: none;
+    }
+
+    .fun-facts-bubble {
+        animation: none;
+    }
+
+    .bubble-cursor {
+        animation: cursorBlink 1.5s infinite;
+    }
+
+    .flag-confetti {
+        animation: flagFallSimple 2s ease-out forwards;
+    }
+
+    @keyframes flagFallSimple {
+        0% { opacity: 1; transform: translate(-50%, -50%); }
+        100% { transform: translate(-50%, calc(-50% + 100vh)); opacity: 0; }
+    }
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (min-width: 1400px) {
+    .fun-facts-bubble {
+        max-width: calc(40vw - 30px);
+    }
+}
+
+@media (min-width: 1200px) {
+    .input-container {
+        padding: 15px max(20px, calc((100vw - 1200px) / 2));
+    }
+}
+
+@media (max-width: 999px) {
+    .fun-facts-bubble {
+        left: 55%;
+        max-width: calc(45vw - 20px);
+    }
+}
+
+@media (max-width: 768px) {
+    .message {
+        max-width: 70%;
+    }
+
+    .empty-state-image {
+        max-width: 400px;
+        max-height: 50vh;
+    }
+
+    .bot .message-bubble a {
+        text-decoration-thickness: 1.5px;
+    }
+
+    .scroll-top-btn {
+        bottom: 95px;
+        right: 15px;
+        width: 45px;
+        height: 45px;
+    }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+    .navbar {
+        height: 65px;
+    }
+
+    .messages-container {
+        top: 65px;
+        bottom: 78px;
+        padding: 18px;
+    }
+
+    .input-container {
+        min-height: 78px;
+        padding: 12px 18px;
+    }
+
+    .chat-input {
+        font-size: 0.88rem;
+    }
+
+    .send-button {
+        width: 42px;
+        height: 42px;
+        font-size: 17px;
+    }
+
+    .print-button {
+        width: 42px;
+        height: 42px;
+    }
+
+    .messages-container::-webkit-scrollbar {
+        width: 9px;
+    }
+}
+
+@media (max-width: 480px) {
+    .navbar {
+        height: 60px;
+        padding: 5px;
+    }
+
+    .messages-container {
+        top: 60px;
+        bottom: 75px;
+        padding: 15px;
+    }
+
+    .input-container {
+        min-height: 75px;
+        padding: 12px 15px;
+        gap: 8px;
+    }
+
+    .chat-input {
+        padding: 10px 14px;
+        font-size: 0.85rem;
+    }
+
+    .send-button {
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+    }
+
+    .print-button {
+        width: 40px;
+        height: 40px;
+    }
+
+    .scroll-top-btn {
+        bottom: 90px;
+        right: 15px;
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
+    }
+
+    .messages-container::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    .empty-state-image {
+        max-width: 300px;
+        max-height: 45vh;
+    }
+
+    .empty-state-text {
+        font-size: 0.9rem;
+    }
+
+    .delete-button {
+        padding: 10px 14px;
+        font-size: 0.8rem;
+        gap: 4px;
+    }
+
+    .share-button {
+        padding: 10px 14px;
+        font-size: 0.8rem;
+        gap: 4px;
+    }
+
+    .fun-facts-bubble {
+        top: -8%;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100vw - 40px);
+        padding: 8px 12px;
+    }
+
+    .bubble-content {
+        font-size: 0.75rem;
+    }
+
+    @keyframes bubblePulse {
+        0%, 100% { transform: translateX(-50%) scale(1); }
+        50% { transform: translateX(-50%) scale(1.02); }
+    }
+
+    .share-modal-overlay {
+        padding: 12px;
+    }
+
+    .share-modal {
+        padding: 18px 14px 16px;
+        gap: 12px;
+        border-radius: 12px;
+    }
+
+    .share-modal-title {
+        font-size: 1rem;
+    }
+
+    .share-modal-desc {
+        font-size: 0.82rem;
+    }
+
+    .share-link-row {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .share-link-input {
+        font-size: 0.78rem;
+        padding: 8px 10px;
+        width: 100%;
+    }
+
+    .share-copy-btn {
+        font-size: 0.78rem;
+        padding: 10px 12px;
+        width: 100%;
+        text-align: center;
+    }
+
+    .share-platforms {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+    }
+
+    .share-platform-btn {
+        font-size: 0.75rem;
+        padding: 9px 8px;
+        gap: 5px;
+    }
+}
+
+@media (max-width: 385px) {
+    .navbar {
+        height: calc(50vh - 1px);
+    }
+
+    .messages-container {
         display: none;
     }
+
+    .input-container {
+        height: calc(50vh + 1px);
+        top: calc(50vh - 1px);
+        bottom: auto;
+    }
+
+    .empty-state-image {
+        max-width: 250px;
+        max-height: 40vh;
+    }
+}
+
+.empty-state.hidden .fun-facts-bubble {
+    display: none;
 }

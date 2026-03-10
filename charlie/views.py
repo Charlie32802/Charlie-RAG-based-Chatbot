@@ -274,17 +274,18 @@ def _db_get_messages(session):
     return list(session.messages.all().order_by('-timestamp')[:MAX_HISTORY_MESSAGES])
 
 
+# ── Updated: returns (user_msg_id, bot_msg_id) ────────────────────────────────
 @sync_to_async
 def _db_save_message_exchange(session, user_message, bot_response, categories):
     try:
         session.refresh_from_db()
     except ConversationSession.DoesNotExist:
-        return
+        return None, None
 
-    ConversationMessage.objects.create(
+    user_msg = ConversationMessage.objects.create(
         session=session, role='user', content=user_message[:MAX_MESSAGE_LENGTH]
     )
-    ConversationMessage.objects.create(
+    bot_msg = ConversationMessage.objects.create(
         session=session,
         role='assistant',
         content=bot_response[:16000],
@@ -298,12 +299,36 @@ def _db_save_message_exchange(session, user_message, bot_response, categories):
         for msg in session.messages.all().order_by('-timestamp')[MAX_STORED_MESSAGES:]:
             msg.delete()
 
+    return user_msg.id, bot_msg.id
 
+
+# ── New: save only bot response (used after message edit) ─────────────────────
+@sync_to_async
+def _db_save_bot_message_only(session, bot_response, categories):
+    try:
+        session.refresh_from_db()
+    except ConversationSession.DoesNotExist:
+        return None
+
+    bot_msg = ConversationMessage.objects.create(
+        session=session,
+        role='assistant',
+        content=bot_response[:16000],
+        categories_searched=','.join(categories) if categories else '',
+        chunks_retrieved=len(categories) if categories else 0,
+    )
+    session.message_count = session.messages.count()
+    session.save()
+    return bot_msg.id
+
+
+# ── Updated: includes message id ─────────────────────────────────────────────
 @sync_to_async
 def _db_get_history_for_load(session):
     msgs = session.messages.all().order_by('-timestamp')[:MAX_STORED_MESSAGES]
     return [
         {
+            'id':        msg.id,
             'role':      msg.role,
             'content':   msg.content,
             'timestamp': msg.timestamp.isoformat(),
@@ -315,6 +340,50 @@ def _db_get_history_for_load(session):
 @sync_to_async
 def _db_delete_session(session):
     session.delete()
+
+
+# ── New: edit a user message and delete all subsequent messages ───────────────
+@sync_to_async
+def _db_edit_message(session_key, message_id, new_content):
+    try:
+        session = ConversationSession.objects.get(session_key=session_key)
+        message = ConversationMessage.objects.get(
+            id=message_id, session=session, role='user'
+        )
+        message.content = new_content
+        message.save()
+
+        # Delete everything after this message
+        ConversationMessage.objects.filter(
+            session=session,
+            timestamp__gt=message.timestamp
+        ).delete()
+
+        session.message_count = session.messages.count()
+        session.save()
+        return True
+    except Exception as e:
+        logger.error(f"DB edit message error: {e}")
+        return False
+
+
+# ── New: get history excluding the most recent user message ───────────────────
+@sync_to_async
+def _db_get_messages_for_regen(session):
+    """Returns (history_messages, last_user_content) for regeneration after edit."""
+    all_msgs = list(
+        session.messages.all().order_by('-timestamp')[:MAX_HISTORY_MESSAGES + 2]
+    )
+    history_msgs   = []
+    last_user_text = None
+
+    for msg in all_msgs:
+        if msg.role == 'user' and last_user_text is None:
+            last_user_text = msg.content  # capture the edited message
+        else:
+            history_msgs.append(msg)
+
+    return history_msgs[:MAX_HISTORY_MESSAGES], last_user_text
 
 
 async def get_or_create_session(request):
@@ -480,10 +549,11 @@ async def chat_stream_api(request):
                 complete_response = (
                     _clean_response(''.join(full_response).strip()) or ERR_EMPTY
                 )
-                await _db_save_message_exchange(
+                # ── Save and return message IDs ──────────────────────────────
+                user_msg_id, bot_msg_id = await _db_save_message_exchange(
                     session, user_message, complete_response, categories
                 )
-                yield f"data: {json.dumps({'done': True})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'user_message_id': user_msg_id, 'bot_message_id': bot_msg_id})}\n\n"
 
             except httpx.TimeoutException:
                 yield f"data: {json.dumps({'error': ERR_TIMEOUT})}\n\n"
@@ -531,8 +601,8 @@ async def chat_api(request):
         messages   = ctx['messages']
 
         bot_response = await call_ollama(messages)
-        await _db_save_message_exchange(session, user_message, bot_response, categories)
-        return JsonResponse({'response': bot_response, 'status': 'success'})
+        user_msg_id, _ = await _db_save_message_exchange(session, user_message, bot_response, categories)
+        return JsonResponse({'response': bot_response, 'status': 'success', 'user_message_id': user_msg_id})
 
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid request'}, status=400)
@@ -547,6 +617,8 @@ async def chat_api(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 async def load_history_api(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
     try:
         session  = await get_or_create_session(request)
         messages = await _db_get_history_for_load(session)
@@ -573,3 +645,155 @@ async def delete_conversation_api(request):
     except Exception as e:
         logger.error(f"Delete error: {e}")
         return JsonResponse({'error': 'Failed to delete'}, status=500)
+
+
+# ── New: edit a user message and delete all subsequent messages ───────────────
+@csrf_exempt
+@require_http_methods(["POST"])
+async def edit_message_api(request):
+    try:
+        data        = json.loads(request.body)
+        message_id  = data.get('message_id')
+        new_content = data.get('new_content', '').strip()
+
+        if not message_id or not new_content:
+            return JsonResponse({'error': 'Invalid data'}, status=400)
+
+        if not request.session.session_key:
+            return JsonResponse({'error': 'No session'}, status=400)
+
+        if len(new_content) > MAX_MESSAGE_LENGTH:
+            return JsonResponse(
+                {'error': f'Message too long. Maximum {MAX_MESSAGE_LENGTH} characters.'}, status=400
+            )
+
+        success = await _db_edit_message(
+            request.session.session_key, message_id, new_content
+        )
+
+        if success:
+            return JsonResponse({'status': 'success'})
+        else:
+            return JsonResponse({'error': 'Message not found'}, status=404)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid request'}, status=400)
+    except Exception as e:
+        logger.error(f"Edit message error: {e}", exc_info=True)
+        return JsonResponse({'error': ERR_GENERIC}, status=500)
+
+
+# ── New: regenerate Charlie's response after a message edit ──────────────────
+@csrf_exempt
+@require_http_methods(["POST"])
+async def regenerate_response_api(request):
+    session = None
+    try:
+        session_key = request.session.session_key or 'unknown'
+        if not await _check_rate_limit(session_key):
+            return JsonResponse({'error': ERR_RATE_LIMIT}, status=429)
+
+        session = await get_or_create_session(request)
+        _processing_sessions.add(session.session_key)
+
+        # Get history (excluding last user msg) + the last user message content
+        history_msgs, user_message = await _db_get_messages_for_regen(session)
+
+        if not user_message:
+            return JsonResponse({'error': 'No message to regenerate'}, status=400)
+
+        history = build_conversation_history(history_msgs)
+
+        ph_time      = get_philippine_time()
+        time_context = (
+            f"{get_time_greeting()}! Today is "
+            f"{ph_time.strftime('%A, %B %d, %Y at %I:%M %p')} (Philippine Time)"
+        )
+
+        (tracking_context, tracking_hits), (rag_context, categories, item_count) = await asyncio.gather(
+            _get_tracking_context_redis(user_message),
+            get_relevant_context(user_message),
+        )
+
+        if tracking_hits > 0:
+            categories = ['tracking']
+            item_count = tracking_hits
+        else:
+            tracking_context = ''
+
+        system_prompt = get_system_prompt(
+            relevant_context=rag_context,
+            tracking_context=tracking_context,
+            time_context=time_context,
+            is_first_message=session.message_count <= 1,
+            item_count=item_count,
+        )
+
+        def _total_chars(msgs):
+            return sum(len(str(m.get('content', ''))) for m in msgs)
+
+        messages    = [system_prompt] + history + [{'role': 'user', 'content': user_message}]
+        total_chars = _total_chars(messages)
+
+        if total_chars > SAFE_TOTAL_PROMPT_CHARS:
+            trimmed = list(history)
+            while trimmed and _total_chars(
+                [system_prompt] + trimmed + [{'role': 'user', 'content': user_message}]
+            ) > SAFE_TOTAL_PROMPT_CHARS:
+                trimmed.pop(0)
+            messages = [system_prompt] + trimmed + [{'role': 'user', 'content': user_message}]
+
+        async def event_stream():
+            full_response = []
+            try:
+                payload           = _build_ollama_payload(messages)
+                payload['stream'] = True
+                url = f'http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat'
+
+                async with httpx.AsyncClient(timeout=httpx.Timeout(OLLAMA_TIMEOUT)) as client:
+                    async with client.stream('POST', url, json=payload) as resp:
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            token = chunk.get('message', {}).get('content', '')
+                            if token:
+                                full_response.append(token)
+                                yield f"data: {json.dumps({'token': token})}\n\n"
+                            if chunk.get('done'):
+                                break
+
+                complete_response = (
+                    _clean_response(''.join(full_response).strip()) or ERR_EMPTY
+                )
+                bot_msg_id = await _db_save_bot_message_only(session, complete_response, categories)
+                yield f"data: {json.dumps({'done': True, 'bot_message_id': bot_msg_id})}\n\n"
+
+            except httpx.TimeoutException:
+                yield f"data: {json.dumps({'error': ERR_TIMEOUT})}\n\n"
+            except httpx.RequestError as e:
+                logger.error(f"Regen stream error: {e}")
+                yield f"data: {json.dumps({'error': ERR_CONNECTION})}\n\n"
+            except Exception as e:
+                logger.error(f"Regen stream error: {e}", exc_info=True)
+                yield f"data: {json.dumps({'error': ERR_GENERIC})}\n\n"
+            finally:
+                if session:
+                    _processing_sessions.discard(session.session_key)
+
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control']     = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid request'}, status=400)
+    except Exception as e:
+        logger.error(f"Regenerate error: {e}", exc_info=True)
+        if session:
+            _processing_sessions.discard(session.session_key)
+        return JsonResponse({'error': ERR_GENERIC}, status=500)
