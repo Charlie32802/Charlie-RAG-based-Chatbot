@@ -23,7 +23,7 @@ from .prompts import get_system_prompt
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_HOST  = os.getenv('OLLAMA_HOST',  '192.168.168.108')
+OLLAMA_HOST  = os.getenv('OLLAMA_HOST',  '192.168.168.199')
 OLLAMA_PORT  = os.getenv('OLLAMA_PORT',  '11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b-instruct-q5_K_M')
 

@@ -166,7 +166,7 @@ def run_sync(use_api=False, api_url=None, api_token=None):
 
     # Check Redis connection
     if not redis_available():
-        logger.error("Cannot connect to Redis. Is it running on 192.168.168.108:6379?")
+        logger.error("Cannot connect to Redis. Is it running on 192.168.168.199:6379?")
         logger.error("Run on Ubuntu: sudo systemctl start redis-server")
         sys.exit(1)
 
@@ -282,7 +282,7 @@ if __name__ == '__main__':
             count = get_total_document_count()
             print(f"Redis OK — {count} documents in cache")
         else:
-            print("Redis UNAVAILABLE — check 192.168.168.108:6379")
+            print("Redis UNAVAILABLE — check 192.168.168.199:6379")
 
     elif '--sql' in sys.argv:
         # Load directly from SQL dump file
@@ -294,7 +294,7 @@ if __name__ == '__main__':
             sys.exit(1)
         store_document, clear_all_tracking_data, get_total_document_count, redis_available = _get_redis_functions()
         if not redis_available():
-            print("Redis UNAVAILABLE — check 192.168.168.108:6379")
+            print("Redis UNAVAILABLE — check 192.168.168.199:6379")
             sys.exit(1)
         logger.info(f"Loading from SQL file: {sql_path}")
         docs = _fetch_from_sql_file(sql_path)

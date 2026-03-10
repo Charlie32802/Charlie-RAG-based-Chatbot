@@ -40,8 +40,11 @@ MIDDLEWARE = [
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "http://192.168.168.104:8000",
     "http://192.168.168.121:8000",
+    "http://192.168.168.121:8002",
+    "http://192.168.168.214:8003",
+    "http://192.168.168.159:8001",
+    "http://192.168.168.199:8002",
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -98,7 +101,7 @@ RATELIMIT_USE_CACHE = 'default'
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': 'redis://192.168.168.108:6379/0',
+        'LOCATION': 'redis://192.168.168.199:6379/0',
         'OPTIONS': {
             'socket_connect_timeout': 3,
             'socket_timeout': 3,

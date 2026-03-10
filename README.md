@@ -1,78 +1,17 @@
-# Charlie RAG-based Chatbot
-
-A Django-based RAG (Retrieval-Augmented Generation) chatbot that uses ChromaDB, BM25 search, and Ollama for local LLM inference.
-
-## Prerequisites
-
-- **Python 3.10+**
-- **Ollama** — [Install from ollama.ai](https://ollama.ai)
-
-## Quick Start
-
-### 1. Create and activate a virtual environment
-
-```powershell
+# 1. Create and activate venv
 python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
+venv/Scripts/activate        # Windows
+source venv/bin/activate     # Mac/Linux
 
-On Linux/macOS:
-
-```bash
-python -m venv venv
-source venv/bin/activate
-```
-
-### 2. Install dependencies
-
-```bash
+# 2. Install packages
 pip install -r requirements.txt
-```
 
-### 3. Configure environment variables
-
-Copy `.env.example` to `.env` and set the required variables:
-
-```bash
+# 3. Set up environment
 cp .env.example .env
-```
 
-Edit `.env` and set at least:
+# Generate a secret key and paste it into your .env as DJANGO_KEY
+python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 
-| Variable       | Required | Description                                                                                                                                    |
-| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DJANGO_KEY`   | Yes      | Django secret key. Generate with: `python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"` |
-| `OLLAMA_HOST`  | No       | Ollama host (default: `localhost`)                                                                                                             |
-| `OLLAMA_PORT`  | No       | Ollama port (default: `11434`)                                                                                                                 |
-| `OLLAMA_MODEL` | No       | Model name (default: `llama3.1:8b-instruct-q6_K`)                                                                                              |
-
-### 4. Set up Ollama
-
-Install Ollama and pull the model:
-
-```bash
-ollama pull llama3.1:8b-instruct-q6_K
-```
-
-### 5. Run migrations and collect static files
-
-```bash
+# 4. Run
 python manage.py migrate
-python manage.py collectstatic --noinput
-```
-
-### 6. Start the server
-
-```bash
-python manage.py runserver
-```
-
-Open **http://127.0.0.1:8000** in your browser.
-
-## Optional: Add documents for RAG
-
-To use the RAG features, add documents via the Django admin:
-
-1. Create a superuser: `python manage.py createsuperuser`
-2. Go to http://127.0.0.1:8000/admin
-3. Upload documents in the Charlie app
+uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload

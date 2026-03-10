@@ -2,7 +2,7 @@
 redis_tracking.py
 -----------------
 All document tracking read/write operations via Redis.
-Redis runs on the Ubuntu server at 192.168.168.108:6379.
+Redis runs on the Ubuntu server at 192.168.168.199:6379.
 
 Key structure:
   doc:pdid:{pdid}          → JSON of full document record
@@ -23,7 +23,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-REDIS_HOST = os.getenv('REDIS_HOST', '192.168.168.108')
+REDIS_HOST = os.getenv('REDIS_HOST', '192.168.168.199')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB   = int(os.getenv('REDIS_DB', 0))
 
