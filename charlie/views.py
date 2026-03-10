@@ -797,3 +797,24 @@ async def regenerate_response_api(request):
         if session:
             _processing_sessions.discard(session.session_key)
         return JsonResponse({'error': ERR_GENERIC}, status=500)
+    
+@csrf_exempt
+@require_http_methods(["POST"])
+async def save_partial_bot_message_api(request):
+    try:
+        data         = json.loads(request.body)
+        partial_text = data.get('partial_text', '').strip()
+
+        if not partial_text:
+            return JsonResponse({'error': 'No text provided'}, status=400)
+
+        session    = await get_or_create_session(request)
+        bot_msg_id = await _db_save_bot_message_only(session, partial_text, [])
+
+        return JsonResponse({'status': 'success', 'message_id': bot_msg_id})
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid request'}, status=400)
+    except Exception as e:
+        logger.error(f"Save partial error: {e}", exc_info=True)
+        return JsonResponse({'error': ERR_GENERIC}, status=500)

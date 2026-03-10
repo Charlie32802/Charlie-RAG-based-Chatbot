@@ -351,7 +351,36 @@ body {
     background-color: #d0d0d0;
 }
 
-/* ── Edit pagination (< 1/2 >) ────────────────────────────────────────────── */
+/* ── Stop button (replaces send while streaming) ──────────────────────────── */
+#sendButton.stop-mode {
+    background-color: #c62828;
+}
+
+#sendButton.stop-mode:hover {
+    background-color: #b71c1c;
+}
+
+/* Tooltip for send button when in stop mode */
+#sendButton[data-tip] {
+    position: relative;
+}
+
+#sendButton[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(33, 33, 33, 0.88);
+    color: #fff;
+    font-size: 0.7rem;
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+    padding: 3px 7px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 50;
+}
 .edit-pagination {
     display: flex;
     align-items: center;

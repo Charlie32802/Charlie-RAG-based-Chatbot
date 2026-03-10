@@ -1,4 +1,42 @@
-// chat_handler.js — send, stream, delete, share, print, regenerate after edit
+// chat_handler.js — send, stream, stop, delete, share, print, regenerate after edit
+
+// ── Stop icon (circle + filled square) ────────────────────────────────────
+const ICON_STOP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><rect x="8" y="8" width="8" height="8" rx="1" fill="currentColor" stroke="none"/></svg>`;
+
+// Save original send button HTML so we can restore it after stopping
+let _sendBtnOriginalHTML = '';
+document.addEventListener('DOMContentLoaded', function () {
+    const sendButton = document.getElementById('sendButton');
+    if (sendButton) _sendBtnOriginalHTML = sendButton.innerHTML;
+});
+
+// ── Stop button helpers ────────────────────────────────────────────────────
+function _activateStopButton(sendButton, onStop) {
+    sendButton.innerHTML = ICON_STOP;
+    sendButton.disabled  = false;
+    sendButton.setAttribute('data-tip', 'Stop responding');
+    sendButton.classList.add('stop-mode');
+    sendButton.addEventListener('click', onStop, { once: true });
+}
+
+function _restoreSendButton(sendButton) {
+    sendButton.innerHTML = _sendBtnOriginalHTML;
+    sendButton.removeAttribute('data-tip');
+    sendButton.classList.remove('stop-mode');
+}
+
+// ── Edit button lock helpers ───────────────────────────────────────────────
+function _disableAllEditButtons() {
+    document.querySelectorAll('#messagesContainer .edit-btn').forEach(btn => {
+        btn.disabled = true;
+    });
+}
+
+function _enableAllEditButtons() {
+    document.querySelectorAll('#messagesContainer .edit-btn').forEach(btn => {
+        btn.disabled = false;
+    });
+}
 
 // ── Delete conversation ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function () {
@@ -47,14 +85,15 @@ async function sendMessage(message) {
     const deleteButton = document.getElementById('deleteButton');
     const shareButton  = document.getElementById('shareButton');
 
-    // Add user message to UI and keep a reference so we can set its ID later
     const userMsgDiv = addMessageToUI(message, true);
 
-    // Disable controls
     chatInput.disabled    = true;
     sendButton.disabled   = true;
     deleteButton.disabled = true;
     if (shareButton) shareButton.disabled = true;
+
+    // Disable all edit buttons while Charlie is responding
+    _disableAllEditButtons();
 
     showTypingIndicator();
 
@@ -62,6 +101,19 @@ async function sendMessage(message) {
     let botBubble       = null;
     let firstToken      = true;
     let streamCompleted = false;
+    let partialText     = '';
+    let aborted         = false;
+    let reader          = null;
+    const controller    = new AbortController();
+
+    const onStop = () => {
+        aborted = true;
+        controller.abort();
+        if (reader) reader.cancel().catch(() => {});
+    };
+
+    // Activate stop button immediately (even during typing indicator)
+    _activateStopButton(sendButton, onStop);
 
     try {
         const response = await fetch('/api/chat-stream/', {
@@ -71,6 +123,7 @@ async function sendMessage(message) {
                 'X-CSRFToken': getCookie('csrftoken'),
             },
             body: JSON.stringify({ message }),
+            signal: controller.signal,
         });
 
         if (!response.ok || !response.body) {
@@ -86,9 +139,9 @@ async function sendMessage(message) {
             return;
         }
 
-        const reader  = response.body.getReader();
+        reader = response.body.getReader();
         const decoder = new TextDecoder();
-        let buffer    = '';
+        let buffer = '';
 
         while (true) {
             const { done, value } = await reader.read();
@@ -100,7 +153,6 @@ async function sendMessage(message) {
 
             for (const line of lines) {
                 if (!line.startsWith('data: ')) continue;
-
                 let parsed;
                 try { parsed = JSON.parse(line.slice(6)); } catch (_) { continue; }
 
@@ -115,6 +167,7 @@ async function sendMessage(message) {
                 }
 
                 if (parsed.token) {
+                    partialText += parsed.token;
                     if (firstToken) {
                         removeTypingIndicator();
                         botMsgDiv = addMessageToUI('', false);
@@ -127,15 +180,12 @@ async function sendMessage(message) {
 
                 if (parsed.done) {
                     if (botBubble) finalizeStreamedBubble(botBubble);
-
-                    // Attach message IDs so the Edit button can reference them
                     if (parsed.user_message_id && userMsgDiv) {
                         userMsgDiv.dataset.messageId = String(parsed.user_message_id);
                     }
                     if (parsed.bot_message_id && botMsgDiv) {
                         botMsgDiv.dataset.messageId = String(parsed.bot_message_id);
                     }
-
                     streamCompleted = true;
                     break;
                 }
@@ -149,28 +199,53 @@ async function sendMessage(message) {
             await typeMessage(botBubble, "I tried to respond but nothing came out. Could you ask again?");
         }
 
-    } catch (error) {
-        console.error('Stream error:', error);
-        removeTypingIndicator();
-        if (!botMsgDiv) {
-            botMsgDiv = addMessageToUI('', false);
-            botBubble = botMsgDiv.querySelector('.message-bubble');
+    } catch (err) {
+        if (err.name === 'AbortError' || aborted) {
+            if (!firstToken && botBubble && partialText.trim()) {
+                // Finalize and save partial response
+                finalizeStreamedBubble(botBubble);
+                try {
+                    const saveRes = await fetch('/api/save-partial/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                        body: JSON.stringify({ partial_text: partialText.trim() }),
+                    });
+                    const saveData = await saveRes.json();
+                    if (saveData.message_id && botMsgDiv) {
+                        botMsgDiv.dataset.messageId = String(saveData.message_id);
+                    }
+                } catch (_) {}
+            } else if (firstToken) {
+                // Stopped during typing indicator — clean up with no message
+                removeTypingIndicator();
+                if (botMsgDiv) botMsgDiv.remove();
+            }
+            // No error shown — user chose to stop
+        } else {
+            console.error('Stream error:', err);
+            removeTypingIndicator();
+            if (!botMsgDiv) {
+                botMsgDiv = addMessageToUI('', false);
+                botBubble = botMsgDiv.querySelector('.message-bubble');
+            }
+            if (botBubble) botBubble.textContent = 'Sorry, I encountered an error. Please try again.';
         }
-        if (botBubble) botBubble.textContent = 'Sorry, I encountered an error. Please try again.';
     } finally {
+        _restoreSendButton(sendButton);
         chatInput.disabled    = false;
         sendButton.disabled   = false;
         deleteButton.disabled = false;
         if (shareButton) shareButton.disabled = false;
+        // Re-enable all edit buttons now that Charlie is done
+        _enableAllEditButtons();
         chatInput.focus();
-
         if (streamCompleted) checkAndShowShareButton();
     }
 }
 
 // ── Regenerate Charlie's response after a message edit ────────────────────
-// Called from conversation.js saveEdit() after the edit is saved to DB.
-async function sendAfterEdit() {
+// userMsgId is passed so _fillLastBotText stores the response for pagination.
+async function sendAfterEdit(userMsgId) {
     const chatInput    = document.getElementById('chatInput');
     const sendButton   = document.getElementById('sendButton');
     const deleteButton = document.getElementById('deleteButton');
@@ -181,12 +256,28 @@ async function sendAfterEdit() {
     deleteButton.disabled = true;
     if (shareButton) shareButton.disabled = true;
 
+    // Disable all edit buttons while Charlie is responding
+    _disableAllEditButtons();
+
     showTypingIndicator();
 
     let botMsgDiv       = null;
     let botBubble       = null;
     let firstToken      = true;
     let streamCompleted = false;
+    let partialText     = '';
+    let aborted         = false;
+    let reader          = null;
+    const controller    = new AbortController();
+
+    const onStop = () => {
+        aborted = true;
+        controller.abort();
+        if (reader) reader.cancel().catch(() => {});
+    };
+
+    // Activate stop button immediately (even during typing indicator)
+    _activateStopButton(sendButton, onStop);
 
     try {
         const response = await fetch('/api/regenerate/', {
@@ -196,6 +287,7 @@ async function sendAfterEdit() {
                 'X-CSRFToken': getCookie('csrftoken'),
             },
             body: JSON.stringify({}),
+            signal: controller.signal,
         });
 
         if (!response.ok || !response.body) {
@@ -211,9 +303,9 @@ async function sendAfterEdit() {
             return;
         }
 
-        const reader  = response.body.getReader();
+        reader = response.body.getReader();
         const decoder = new TextDecoder();
-        let buffer    = '';
+        let buffer = '';
 
         while (true) {
             const { done, value } = await reader.read();
@@ -225,7 +317,6 @@ async function sendAfterEdit() {
 
             for (const line of lines) {
                 if (!line.startsWith('data: ')) continue;
-
                 let parsed;
                 try { parsed = JSON.parse(line.slice(6)); } catch (_) { continue; }
 
@@ -240,6 +331,7 @@ async function sendAfterEdit() {
                 }
 
                 if (parsed.token) {
+                    partialText += parsed.token;
                     if (firstToken) {
                         removeTypingIndicator();
                         botMsgDiv = addMessageToUI('', false);
@@ -251,7 +343,13 @@ async function sendAfterEdit() {
                 }
 
                 if (parsed.done) {
-                    if (botBubble) finalizeStreamedBubble(botBubble);
+                    if (botBubble) {
+                        finalizeStreamedBubble(botBubble);
+                        // Store final bot HTML for pagination
+                        if (userMsgId && typeof _fillLastBotText === 'function') {
+                            _fillLastBotText(userMsgId, botBubble.innerHTML);
+                        }
+                    }
                     if (parsed.bot_message_id && botMsgDiv) {
                         botMsgDiv.dataset.messageId = String(parsed.bot_message_id);
                     }
@@ -268,21 +366,50 @@ async function sendAfterEdit() {
             await typeMessage(botBubble, "I tried to respond but nothing came out. Could you ask again?");
         }
 
-    } catch (error) {
-        console.error('Regenerate error:', error);
-        removeTypingIndicator();
-        if (!botMsgDiv) {
-            botMsgDiv = addMessageToUI('', false);
-            botBubble = botMsgDiv.querySelector('.message-bubble');
+    } catch (err) {
+        if (err.name === 'AbortError' || aborted) {
+            if (!firstToken && botBubble && partialText.trim()) {
+                finalizeStreamedBubble(botBubble);
+                try {
+                    const saveRes = await fetch('/api/save-partial/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                        body: JSON.stringify({ partial_text: partialText.trim() }),
+                    });
+                    const saveData = await saveRes.json();
+                    if (saveData.message_id && botMsgDiv) {
+                        botMsgDiv.dataset.messageId = String(saveData.message_id);
+                    }
+                } catch (_) {}
+                if (userMsgId && typeof _fillLastBotText === 'function') {
+                    _fillLastBotText(userMsgId, botBubble.innerHTML);
+                }
+            } else {
+                // Stopped during typing indicator — clean up with no message
+                if (firstToken) removeTypingIndicator();
+                if (botMsgDiv) botMsgDiv.remove();
+                if (userMsgId && typeof _fillLastBotText === 'function') {
+                    _fillLastBotText(userMsgId, '');
+                }
+            }
+        } else {
+            console.error('Regenerate error:', err);
+            removeTypingIndicator();
+            if (!botMsgDiv) {
+                botMsgDiv = addMessageToUI('', false);
+                botBubble = botMsgDiv.querySelector('.message-bubble');
+            }
+            if (botBubble) botBubble.textContent = 'Sorry, I encountered an error. Please try again.';
         }
-        if (botBubble) botBubble.textContent = 'Sorry, I encountered an error. Please try again.';
     } finally {
+        _restoreSendButton(sendButton);
         chatInput.disabled    = false;
         sendButton.disabled   = false;
         deleteButton.disabled = false;
         if (shareButton) shareButton.disabled = false;
+        // Re-enable all edit buttons now that Charlie is done
+        _enableAllEditButtons();
         chatInput.focus();
-
         if (streamCompleted) checkAndShowShareButton();
     }
 }
@@ -293,6 +420,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const sendButton = document.getElementById('sendButton');
 
     sendButton.addEventListener('click', () => {
+        if (sendButton.classList.contains('stop-mode')) return;
         const message = chatInput.value.trim();
         if (message) {
             sendMessage(message);
@@ -306,6 +434,7 @@ document.addEventListener('DOMContentLoaded', function () {
     chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
+            if (sendButton.classList.contains('stop-mode')) return;
             const message = chatInput.value.trim();
             if (message) {
                 sendMessage(message);

@@ -13,7 +13,13 @@ const ICON_EDIT  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 function _ehGet(messageId) {
     try {
         const raw = sessionStorage.getItem('editHistory:' + messageId);
-        return raw ? JSON.parse(raw) : null;
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        // Migrate old format (string[]) to new format ({userText,botText}[])
+        if (parsed.length > 0 && typeof parsed[0] === 'string') {
+            return parsed.map(s => ({ userText: s, botText: '' }));
+        }
+        return parsed;
     } catch { return null; }
 }
 function _ehSet(messageId, versions) {
@@ -141,24 +147,35 @@ async function loadConversationHistory() {
             if (emptyState) emptyState.classList.add('hidden');
 
             for (const msg of data.messages) {
-                const msgDiv = addMessageToUI(
+                addMessageToUI(
                     msg.content,
                     msg.role === 'user',
                     msg.id ? String(msg.id) : null
                 );
+            }
 
-                // Restore pagination if this user message was edited this session
-                if (msg.role === 'user' && msg.id) {
-                    const mid      = String(msg.id);
-                    const versions = _ehGet(mid);
-                    const idx      = _eiGet(mid);
-                    if (versions && versions.length > 1 && idx !== null) {
-                        // Show the version that was current when page was refreshed
-                        const bubble = msgDiv.querySelector('.message-bubble');
-                        if (bubble) bubble.innerHTML = versions[idx];
-                        _renderPagination(msgDiv, mid);
-                    }
+            // Second pass: restore pagination + correct version display for both bubbles
+            const container = document.getElementById('messagesContainer');
+            for (const msg of data.messages) {
+                if (msg.role !== 'user' || !msg.id) continue;
+                const mid      = String(msg.id);
+                const versions = _ehGet(mid);
+                const idx      = _eiGet(mid);
+                if (!versions || versions.length <= 1 || idx === null) continue;
+
+                const userDiv = [...container.querySelectorAll('.message.user')]
+                    .find(d => d.dataset.messageId === mid);
+                if (!userDiv) continue;
+
+                const ver = versions[idx];
+                const userBubble = userDiv.querySelector('.message-bubble');
+                if (userBubble) userBubble.innerHTML = ver.userText;
+
+                const botDiv = _getNextBotDiv(userDiv);
+                if (botDiv && ver.botText) {
+                    botDiv.querySelector('.message-bubble').innerHTML = ver.botText;
                 }
+                _renderPagination(userDiv, mid);
             }
 
             scrollToBottom();
@@ -391,8 +408,10 @@ async function saveEdit(messageDiv, bubble, editActions, messageId, originalText
         if (copyBtn) copyBtn.disabled = false;
         if (editBtn) editBtn.disabled = false;
 
-        // Track edit history and show pagination
-        _addToEditHistory(messageDiv, messageId, originalText, newText);
+        // Track edit history — must capture bot text BEFORE removeMessagesAfter
+        const oldBotDiv  = _getNextBotDiv(messageDiv);
+        const oldBotHTML = oldBotDiv ? oldBotDiv.querySelector('.message-bubble').innerHTML : '';
+        _addToEditHistory(messageDiv, messageId, originalText, newText, oldBotHTML);
 
         // Remove all messages after this one in the DOM
         removeMessagesAfter(messageDiv);
@@ -403,7 +422,7 @@ async function saveEdit(messageDiv, bubble, editActions, messageId, originalText
 
         // Re-trigger Charlie's response via the regenerate endpoint
         if (typeof sendAfterEdit === 'function') {
-            await sendAfterEdit();
+            await sendAfterEdit(messageId);
         }
 
     } catch (err) {
@@ -426,17 +445,39 @@ function removeMessagesAfter(messageDiv) {
 }
 
 // ── Edit history + pagination ──────────────────────────────────────────────
-function _addToEditHistory(messageDiv, messageId, oldText, newText) {
+function _addToEditHistory(messageDiv, messageId, oldText, newText, oldBotHTML = '') {
     let versions = _ehGet(messageId);
-    if (!versions) versions = [oldText];
-    versions.push(newText);
+    if (!versions) {
+        // v0 = the original pair before any edit
+        versions = [{ userText: oldText, botText: oldBotHTML }];
+    }
+    // Latest version — bot text is null until Charlie responds
+    versions.push({ userText: newText, botText: null });
     _ehSet(messageId, versions);
     _eiSet(messageId, versions.length - 1);
     _renderPagination(messageDiv, messageId);
 }
 
+// Called by sendAfterEdit once Charlie's response is ready
+function _fillLastBotText(messageId, botHTML) {
+    const versions = _ehGet(messageId);
+    if (!versions || versions.length === 0) return;
+    versions[versions.length - 1].botText = botHTML || '';
+    _ehSet(messageId, versions);
+}
+
+// Returns the next .message.bot sibling after a user message div
+function _getNextBotDiv(userMsgDiv) {
+    const container = document.getElementById('messagesContainer');
+    const all = Array.from(container.querySelectorAll('.message'));
+    const idx = all.indexOf(userMsgDiv);
+    if (idx === -1 || idx + 1 >= all.length) return null;
+    const next = all[idx + 1];
+    return next.classList.contains('bot') ? next : null;
+}
+
 function _renderPagination(messageDiv, messageId) {
-    const versions  = _ehGet(messageId);
+    const versions   = _ehGet(messageId);
     const currentIdx = _eiGet(messageId);
     if (!versions || currentIdx === null) return;
     const total   = versions.length;
@@ -446,10 +487,10 @@ function _renderPagination(messageDiv, messageId) {
     const existing = messageDiv.querySelector('.edit-pagination');
     if (existing) existing.remove();
 
-    const pagination        = document.createElement('div');
-    pagination.className    = 'edit-pagination';
+    const pagination         = document.createElement('div');
+    pagination.className     = 'edit-pagination';
     pagination.dataset.msgId = messageId;
-    pagination.innerHTML    = `
+    pagination.innerHTML     = `
         <button class="page-prev" ${currentIdx === 0 ? 'disabled' : ''}>&#8249;</button>
         <span class="page-indicator">${current}/${total}</span>
         <button class="page-next" ${currentIdx === total - 1 ? 'disabled' : ''}>&#8250;</button>
@@ -459,15 +500,25 @@ function _renderPagination(messageDiv, messageId) {
     const messageContent = messageDiv.querySelector('.message-content');
     messageContent.appendChild(pagination);
 
-    const prevBtn = pagination.querySelector('.page-prev');
-    const nextBtn = pagination.querySelector('.page-next');
-    const bubble  = messageDiv.querySelector('.message-bubble');
+    const prevBtn    = pagination.querySelector('.page-prev');
+    const nextBtn    = pagination.querySelector('.page-next');
+    const userBubble = messageDiv.querySelector('.message-bubble');
+
+    function applyVersion(idx) {
+        const ver = _ehGet(messageId)[idx];
+        if (!ver) return;
+        userBubble.innerHTML = ver.userText;
+        const botDiv = _getNextBotDiv(messageDiv);
+        if (botDiv) {
+            botDiv.querySelector('.message-bubble').innerHTML = ver.botText || '';
+        }
+    }
 
     prevBtn.addEventListener('click', () => {
         const newIdx = _eiGet(messageId) - 1;
         if (newIdx < 0) return;
         _eiSet(messageId, newIdx);
-        bubble.innerHTML = versions[newIdx];
+        applyVersion(newIdx);
         _renderPagination(messageDiv, messageId);
     });
 
@@ -475,7 +526,7 @@ function _renderPagination(messageDiv, messageId) {
         const newIdx = _eiGet(messageId) + 1;
         if (newIdx >= total) return;
         _eiSet(messageId, newIdx);
-        bubble.innerHTML = versions[newIdx];
+        applyVersion(newIdx);
         _renderPagination(messageDiv, messageId);
     });
 }
