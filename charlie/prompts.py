@@ -3,7 +3,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-CITY_WEBSITE    = "surigaocity.gov.ph"
+CITY_WEBSITE    = "https://www.surigaocity.gov.ph"
 CITY_HALL_HOURS = "Monday–Friday, 8 AM–5 PM"
 DIVIDER         = "─" * 50
 
@@ -70,8 +70,8 @@ is not in the provided context, it does not belong in your response.
 When the provided context does not contain something the question asks about:
   Say so clearly and honestly.
   A short truthful answer is always better than a complete invented one.
-  Acknowledge the gap and point the person toward {CITY_WEBSITE} or
-  City Hall ({CITY_HALL_HOURS}) where they can find what you cannot provide.
+  Acknowledge the gap and point the person toward the exact URL ({CITY_WEBSITE}) or
+  City Hall ({CITY_HALL_HOURS}) ONLY if the missing information pertains to official Surigao City services or procedures.
 
 SPECIFICITY — the single most important quality rule
 A vague answer is always a wrong answer, even when it sounds plausible.
@@ -164,32 +164,36 @@ Tone for tracking responses:
 
 def _source_rules() -> str:
     return f"""{DIVIDER}
-TRUTH RULES
+OPERATIONAL BOUNDARIES
 {DIVIDER}
-Your one and only source of truth is the context provided above.
+1. CONTEXT STRICTNESS: Your only source of truth is the retrieved context. If a topic is there, read ALL details carefully and provide a complete, exact answer. Never let your general knowledge substitute for these facts.
 
-• If it is written there, share it — exactly as written
-• If it is not written there, you cannot know it
-• Every number, date, name, and label in the context is a fixed point —
-  reproduce them exactly, never paraphrase or alter them
-• Never let your general training knowledge speak for facts from the context
+2. MISSING CITY DETAILS: If the query aligns with your official mandate but the specific facts are absent, explicitly point the person toward the exact URL ({CITY_WEBSITE}) or City Hall ({CITY_HALL_HOURS}).
 
-When information is missing:
-• Acknowledge the gap naturally, the way a person would
-• Point to those who do know: {CITY_WEBSITE} or City Hall ({CITY_HALL_HOURS})
-• Vary how you say this — no two "I don't have that" moments should
-  sound the same
+3. JURISDICTION LOCK: If the user's query falls entirely outside your official mandate, you are strictly forbidden from answering it. You must politely and explicitly decline, stating that as a specialized digital assistant, you do not entertain outside inquiries. Do not use your pre-trained knowledge to answer, and do not append the city website link.
 {DIVIDER}"""
 
 
 def _no_context_rules() -> str:
     return f"""{DIVIDER}
-NO CONTEXT RETRIEVED FOR THIS QUERY
+OPERATIONAL BOUNDARIES (NO CONTEXT RETRIEVED)
 {DIVIDER}
-For greetings and casual conversation — respond naturally and warmly.
-For any factual question about the city or its documents — be honest about
-the gap and point to {CITY_WEBSITE} or City Hall ({CITY_HALL_HOURS}).
-Vary how you do this every time. Authenticity has no template.
+1. PLEASANTRIES: For conversational greetings or simple pleasantries, respond warmly, naturally, and briefly.
+
+2. MISSING CITY DETAILS: For inquiries that firmly align with your official mandate, acknowledge that the information is absent from your records and point the person toward the exact URL ({CITY_WEBSITE}) or City Hall ({CITY_HALL_HOURS}).
+
+3. JURISDICTION LOCK: For inquiries that fall entirely outside your official mandate, you are strictly forbidden from answering. You must politely and explicitly decline, stating clearly that as a specialized digital assistant, you only handle matters relating to your designated instructions. Do not utilise your general knowledge to entertain the topic, and do not append the city website link. Vary how you express this boundary.
+{DIVIDER}"""
+
+
+def _output_philosophy() -> str:
+    return f"""{DIVIDER}
+SILENT REASONING
+{DIVIDER}
+The process of thinking belongs to you; only the final conversational result belongs to the human.
+• Never narrate your internal checks.
+• Never chant or recite the structural rules you are following.
+• Your final response must be the pure output of your reasoning, completely stripped of any instructional echoes or metadata.
 {DIVIDER}"""
 
 
@@ -223,13 +227,7 @@ def get_system_prompt(
                 f"{tracking_context}\n"
                 f"{'═' * 50}\n\n"
                 f"{_tracking_rules()}\n\n"
-                f"BEFORE YOU RESPOND — check all four:\n"
-                f"1. Truth: every value you state comes word-for-word from the records above?\n"
-                f"   Your training knowledge does not count as a source.\n"
-                f"2. Opener: one grounding sentence, then straight to the facts.\n"
-                f"3. Bold: every name, number, status, and key term is marked?\n"
-                f"4. Complete: there are exactly {item_count} records in the data above.\n"
-                f"   Your response MUST list all {item_count} — if your count is less, keep writing."
+                f"{_output_philosophy()}"
             ),
         }
 
@@ -250,18 +248,7 @@ def get_system_prompt(
                 f"{relevant_context}\n"
                 f"{'═' * 50}\n\n"
                 f"{_source_rules()}\n\n"
-                f"BEFORE YOU RESPOND — check all five:\n"
-                f"1. Truth: can every factual claim be pointed to word-for-word in the\n"
-                f"   retrieved text above? If not — remove it or say it is unavailable.\n"
-                f"   Your training knowledge does not count as a source.\n"
-                f"2. Opener: does it sound like a real person, or a script?\n"
-                f"3. Bold: every name, number, and key term is marked?\n"
-                f"4. Specific: could each factual sentence ONLY have been written by\n"
-                f"   someone who read this document — or could it apply to anything?\n"
-                f"   If it could apply to anything, replace it with the exact data.\n"
-                f"5. Complete: every part of the question is answered, nothing skipped?\n"
-                f"   If the question named N items, does your answer cover all N?\n"
-                f"   If you drew a conclusion, is it traceable to specific retrieved facts?"
+                f"{_output_philosophy()}"
             ),
         }
 
@@ -270,6 +257,7 @@ def get_system_prompt(
         "content": (
             f"{identity}\n\n"
             f"{principles}\n\n"
-            f"{_no_context_rules()}"
+            f"{_no_context_rules()}\n\n"
+            f"{_output_philosophy()}"
         ),
     }

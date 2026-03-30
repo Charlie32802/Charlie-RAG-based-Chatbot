@@ -5,6 +5,8 @@ import logging
 import asyncio
 import httpx
 import time
+import random
+import threading
 from asyncio import Lock as AsyncLock
 
 from dotenv import load_dotenv
@@ -23,7 +25,7 @@ from .prompts import get_system_prompt
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_HOST  = os.getenv('OLLAMA_HOST',  '192.168.168.199')
+OLLAMA_HOST  = os.getenv('OLLAMA_HOST',  '192.168.160.118')
 OLLAMA_PORT  = os.getenv('OLLAMA_PORT',  '11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b-instruct-q5_K_M')
 
@@ -51,6 +53,43 @@ _last_request_time   = {}
 _request_lock        = AsyncLock()
 
 
+_tracking_openers = [
+    "I've located the record you requested. Here are the complete tracking details:",
+    "Sure thing. Here is the current processing status and information for that document:",
+    "Got it! I pulled the most recent tracking data from the system for you:",
+    "No problem. Here are the routing details and history tied to that record:",
+    "Alright, I found the document in the database. Here is what you need to know:",
+    "I'd be happy to help. Here is the latest timeline and status update for that file:",
+    "Of course. I have retrieved the necessary tracking information for you right here:",
+    "Here you go! These are the complete details currently associated with that document:"
+]
+
+_shuffle_state = {
+    'list': [],
+    'index': 0,
+    'lock': threading.Lock()
+}
+
+def _get_next_shuffled_opener(count: int) -> str:
+    with _shuffle_state['lock']:
+        shuffled = _shuffle_state['list']
+        idx = _shuffle_state['index']
+        
+        if not shuffled or idx >= len(shuffled):
+            shuffled = _tracking_openers.copy()
+            random.shuffle(shuffled)
+            _shuffle_state['list'] = shuffled
+            idx = 0
+            
+        selected = shuffled[idx]
+        _shuffle_state['index'] = idx + 1
+        
+    if count > 1:
+        return f"I found {count} tracking records related to your search. {selected}\n"
+        
+    return selected + "\n"
+
+
 async def _get_tracking_context_redis(message: str):
     try:
         from .redis_tracking import search_documents as redis_search, redis_available
@@ -62,44 +101,67 @@ async def _get_tracking_context_redis(message: str):
         if not docs:
             return '', 0
 
-        numbers_in_message = set(re.findall(r'\d+', message))
-        docs = [d for d in docs if str(d.get('pdid', '')) in numbers_in_message]
+        tokens = set(re.findall(r'\w+', message.lower()))
+        
+        # STRICT OVERT-MATCH: Charlie will ONLY track a document if the exact PDID or Slug is detected in the message.
+        exact_matches = [d for d in docs if str(d.get('pdid', '')) in tokens or str(d.get('slug', '')) in tokens]
+        
+        if not exact_matches:
+            return '', 0
+            
+        docs = exact_matches[:3]
 
         if not docs:
             return '', 0
 
-        lines = []
+        doc_title = docs[0].get('title', 'Document') if docs else ''
+        lines = [_get_next_shuffled_opener(len(docs))]
         for doc in docs:
             status = 'Completed' if doc.get('document_completed_status') else 'In progress'
-            lines.append(f"PDID: {doc.get('pdid', '')}")
-            lines.append(f"Title: {doc.get('title', '')}")
-            lines.append(f"Type: {doc.get('document_type', '')}")
-            lines.append(f"Office: {doc.get('office', '')}")
-            lines.append(f"Agency: {doc.get('agency', '')}")
-            lines.append(f"Subject: {doc.get('subject', '')}")
-            lines.append(f"Status: {status}")
+            lines.append(f"**{doc.get('title', 'Document')}**")
+            lines.append(f"• **PDID:** {doc.get('pdid', '')}")
+            lines.append(f"• **Type:** {doc.get('document_type', '')}")
+            lines.append(f"• **Office:** {doc.get('office', '')}")
+            lines.append(f"• **Agency:** {doc.get('agency', '')}")
+            
+            # Clean up the subject field to extract brackets and handle newlines beautifully
+            subject_raw = doc.get('subject', '') or ''
+            subject_cleaned = re.sub(r'\[.*?\]', '', subject_raw).strip()
+            bracket_matches = re.findall(r'\[(.*?)\]', subject_raw)
+            
+            sub_lines = [line.strip() for line in subject_cleaned.split('\n') if line.strip()]
+            if sub_lines:
+                lines.append(f"• **Subject:** {sub_lines[0]}")
+                for extra_line in sub_lines[1:]:
+                    if ':' in extra_line:
+                        k, v = extra_line.split(':', 1)
+                        lines.append(f"• **{k.strip()}:** {v.strip()}")
+                    else:
+                        lines.append(f"• {extra_line}")
+            else:
+                lines.append(f"• **Subject:** None")
+                
+            for bracket in bracket_matches:
+                k_v = bracket.split(':', 1)
+                lines.append(f"• **{k_v[0].strip()}:** {k_v[1].strip() if len(k_v) > 1 else ''}")
+            
+            lines.append(f"• **Status:** {status}")
             if doc.get('current_location') and doc['current_location'] != 'Unknown':
-                lines.append(f"Current location: {doc['current_location']}")
+                lines.append(f"• **Current location:** {doc['current_location']}")
             if doc.get('last_action'):
-                lines.append(f"Last action: {doc['last_action']}")
+                lines.append(f"• **Last action:** {doc['last_action']}")
             if doc.get('overall_days_onprocess'):
-                lines.append(f"Days on process: {doc['overall_days_onprocess']}")
+                lines.append(f"• **Days on process:** {doc.get('overall_days_onprocess')}")
             if doc.get('created_at'):
-                lines.append(f"Filed: {doc['created_at']}")
+                lines.append(f"• **Filed:** {doc['created_at']}")
             if doc.get('created_by'):
-                lines.append(f"Filed by: {doc['created_by']}")
+                lines.append(f"• **Filed by:** {doc['created_by']}")
             if doc.get('route_count'):
-                lines.append(f"Routing stops: {doc['route_count']}")
+                lines.append(f"• **Routing stops:** {doc['route_count']}")
             lines.append("")
 
-        header = (
-            f"TOTAL RECORDS IN THIS RESPONSE: {len(docs)}\n"
-            f"You MUST list ALL {len(docs)} records below. "
-            f"Do not stop early. Do not say there are fewer than {len(docs)}.\n"
-            f"{'─' * 50}\n"
-        )
         logger.info(f"Tracking: Redis hit — {len(docs)} record(s) matched")
-        return header + '\n'.join(lines).strip(), len(docs)
+        return '\n'.join(lines).strip(), len(docs)
 
     except Exception as e:
         logger.error(f"Redis tracking error: {e} — falling back to SQLite")
@@ -132,7 +194,7 @@ def _db_get_tracking_context_sqlite(message: str):
     if not docs:
         return '', 0
 
-    lines = []
+    lines = [_get_next_shuffled_opener(len(docs))]
     for doc in docs:
         status = 'Completed' if doc.document_completed_status else 'In progress'
         location = doc.get_current_location()
@@ -142,34 +204,49 @@ def _db_get_tracking_context_sqlite(message: str):
         except Exception:
             route_count = 0
 
-        lines.append(f"PDID: {doc.pdid}")
-        lines.append(f"Title: {doc.title}")
-        lines.append(f"Type: {doc.document_type}")
-        lines.append(f"Office: {doc.office}")
-        lines.append(f"Agency: {doc.agency}")
-        lines.append(f"Subject: {doc.subject}")
-        lines.append(f"Status: {status}")
-        lines.append(f"Current location: {location}")
+        lines.append(f"**{doc.title}**")
+        lines.append(f"• **PDID:** {doc.pdid}")
+        lines.append(f"• **Type:** {doc.document_type}")
+        lines.append(f"• **Office:** {doc.office}")
+        lines.append(f"• **Agency:** {doc.agency}")
+        
+        # Clean up the subject field to extract brackets and handle newlines beautifully
+        subject_raw = doc.subject or ''
+        subject_cleaned = re.sub(r'\[.*?\]', '', subject_raw).strip()
+        bracket_matches = re.findall(r'\[(.*?)\]', subject_raw)
+        
+        sub_lines = [line.strip() for line in subject_cleaned.split('\n') if line.strip()]
+        if sub_lines:
+            lines.append(f"• **Subject:** {sub_lines[0]}")
+            for extra_line in sub_lines[1:]:
+                if ':' in extra_line:
+                    k, v = extra_line.split(':', 1)
+                    lines.append(f"• **{k.strip()}:** {v.strip()}")
+                else:
+                    lines.append(f"• {extra_line}")
+        else:
+            lines.append(f"• **Subject:** None")
+            
+        for bracket in bracket_matches:
+            k_v = bracket.split(':', 1)
+            lines.append(f"• **{k_v[0].strip()}:** {k_v[1].strip() if len(k_v) > 1 else ''}")
+            
+        lines.append(f"• **Status:** {status}")
+        lines.append(f"• **Current location:** {location}")
         if last_action:
-            lines.append(f"Last action: {last_action}")
+            lines.append(f"• **Last action:** {last_action}")
         if doc.overall_days_onprocess:
-            lines.append(f"Days on process: {doc.overall_days_onprocess}")
+            lines.append(f"• **Days on process:** {doc.overall_days_onprocess}")
         if doc.created_at:
-            lines.append(f"Filed: {doc.created_at}")
+            lines.append(f"• **Filed:** {doc.created_at}")
         if doc.created_by:
-            lines.append(f"Filed by: {doc.created_by}")
+            lines.append(f"• **Filed by:** {doc.created_by}")
         if route_count:
-            lines.append(f"Routing stops: {route_count}")
+            lines.append(f"• **Routing stops:** {route_count}")
         lines.append("")
 
-    header = (
-        f"TOTAL RECORDS IN THIS RESPONSE: {len(docs)}\n"
-        f"You MUST list ALL {len(docs)} records below. "
-        f"Do not stop early. Do not say there are fewer than {len(docs)}.\n"
-        f"{'─' * 50}\n"
-    )
     logger.warning(f"Tracking: SQLite fallback — {len(docs)} record(s) matched")
-    return header + '\n'.join(lines).strip(), len(docs)
+    return '\n'.join(lines).strip(), len(docs)
 
 
 def _is_bullet_line(line):
@@ -454,15 +531,16 @@ async def _prepare_chat_context(request, user_message):
     )
 
     if tracking_hits > 0:
-        logger.info(f"Tracking: {tracking_hits} record(s) matched — using as primary context")
-        categories = ['tracking']
-        item_count = tracking_hits
-    else:
-        tracking_context = ''
+        logger.info(f"Tracking: {tracking_hits} record(s) matched — Bypassing LLM")
+        return {
+            'session': session,
+            'tracking_instant_response': tracking_context,
+            'categories': ['tracking']
+        }
 
     system_prompt = get_system_prompt(
         relevant_context=rag_context,
-        tracking_context=tracking_context,
+        tracking_context='',
         time_context=time_context,
         is_first_message=session.message_count == 0,
         item_count=item_count,
@@ -543,8 +621,8 @@ async def chat_stream_api(request):
 
         ctx        = await _prepare_chat_context(request, user_message)
         session    = ctx['session']
-        categories = ctx['categories']
-        messages   = ctx['messages']
+        categories = ctx.get('categories', [])
+        messages   = ctx.get('messages', [])
 
         async def event_stream():
             full_response = []
@@ -556,6 +634,22 @@ async def chat_stream_api(request):
                 user_msg_id = await _db_save_user_message(session, user_message)
                 if user_msg_id:
                     yield f"data: {json.dumps({'user_message_id': user_msg_id})}\n\n"
+
+                if ctx.get('tracking_instant_response'):
+                    # Bypass LLM directly for tracking data!
+                    complete_response = ctx['tracking_instant_response']
+                    
+                    # Yield chunks quickly to simulate typing without the LLM wait
+                    chunks = complete_response.split('\n')
+                    for chunk in chunks:
+                        yield f"data: {json.dumps({'token': chunk + '\n'})}\n\n"
+                        await asyncio.sleep(0.02)
+                    
+                    bot_msg_id = await _db_save_bot_message_only(
+                        session, complete_response, categories
+                    )
+                    yield f"data: {json.dumps({'done': True, 'bot_message_id': bot_msg_id})}\n\n"
+                    return
 
                 payload           = _build_ollama_payload(messages)
                 payload['stream'] = True
@@ -630,10 +724,14 @@ async def chat_api(request):
 
         ctx        = await _prepare_chat_context(request, user_message)
         session    = ctx['session']
-        categories = ctx['categories']
-        messages   = ctx['messages']
+        categories = ctx.get('categories', [])
 
-        bot_response = await call_ollama(messages)
+        if ctx.get('tracking_instant_response'):
+            bot_response = ctx['tracking_instant_response']
+        else:
+            messages     = ctx['messages']
+            bot_response = await call_ollama(messages)
+
         user_msg_id, _ = await _db_save_message_exchange(session, user_message, bot_response, categories)
         return JsonResponse({'response': bot_response, 'status': 'success', 'user_message_id': user_msg_id})
 
@@ -748,15 +846,10 @@ async def regenerate_response_api(request):
             get_relevant_context(user_message),
         )
 
-        if tracking_hits > 0:
-            categories = ['tracking']
-            item_count = tracking_hits
-        else:
-            tracking_context = ''
 
         system_prompt = get_system_prompt(
             relevant_context=rag_context,
-            tracking_context=tracking_context,
+            tracking_context='',
             time_context=time_context,
             is_first_message=session.message_count <= 1,
             item_count=item_count,
@@ -779,6 +872,18 @@ async def regenerate_response_api(request):
         async def event_stream():
             full_response = []
             try:
+                if tracking_hits > 0:
+                    chunks = tracking_context.split('\n')
+                    for chunk in chunks:
+                        yield f"data: {json.dumps({'token': chunk + '\n'})}\n\n"
+                        await asyncio.sleep(0.01)
+                    
+                    bot_msg_id = await _db_save_bot_message_only(
+                        session, tracking_context, ['tracking']
+                    )
+                    yield f"data: {json.dumps({'done': True, 'bot_message_id': bot_msg_id})}\n\n"
+                    return
+
                 payload           = _build_ollama_payload(messages)
                 payload['stream'] = True
                 url = f'http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat'

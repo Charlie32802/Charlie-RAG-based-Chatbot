@@ -2,7 +2,7 @@
 redis_tracking.py
 -----------------
 All document tracking read/write operations via Redis.
-Redis runs on the Ubuntu server at 192.168.168.199:6379.
+Redis runs on the Ubuntu server at 192.168.160.118:6379.
 
 Key structure:
   doc:pdid:{pdid}          → JSON of full document record
@@ -23,7 +23,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-REDIS_HOST = os.getenv('REDIS_HOST', '192.168.168.199')
+REDIS_HOST = os.getenv('REDIS_HOST', '192.168.160.118')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB   = int(os.getenv('REDIS_DB', 0))
 
@@ -99,58 +99,63 @@ def store_document(doc: dict):
 def search_documents(message: str):
     """
     Search Redis for documents matching the message tokens.
-    Returns list of document dicts ordered by updated_timestamp desc.
+    Returns list of document dicts ordered by match score and timestamp.
     """
     r = get_redis()
     tokens = re.findall(r'\w+', message.lower())
 
-    matched_pdids = set()
+    pdid_scores = {}
 
     for token in tokens:
+        token_matches = set()
+        
         # Pure numeric token - match pdid directly
         if token.isdigit():
             key = f"doc:pdid:{token}"
             if r.exists(key):
-                matched_pdids.add(token)
-            # Also check slug index
-            slug_matches = r.smembers(f"idx:slug:{token}")
-            matched_pdids.update(slug_matches)
+                token_matches.add(token)
+            token_matches.update(r.smembers(f"idx:slug:{token}"))
         else:
             # Extract embedded numbers like pdid1012
             embedded_nums = re.findall(r'\d+', token)
             for num in embedded_nums:
                 key = f"doc:pdid:{num}"
                 if r.exists(key):
-                    matched_pdids.add(num)
-                slug_matches = r.smembers(f"idx:slug:{num}")
-                matched_pdids.update(slug_matches)
+                    token_matches.add(num)
+                token_matches.update(r.smembers(f"idx:slug:{num}"))
 
         # Text token - search all text indexes
         if len(token) >= 4:
             for prefix in ['idx:title:', 'idx:subject:', 'idx:office:',
                            'idx:agency:', 'idx:doctype:', 'idx:createdby:']:
-                matches = r.smembers(f"{prefix}{token}")
-                matched_pdids.update(matches)
+                token_matches.update(r.smembers(f"{prefix}{token}"))
+                
+        # Scored hits: documents that match multiple words get a higher score
+        for pdid in token_matches:
+            pdid_scores[pdid] = pdid_scores.get(pdid, 0) + 1
 
-    if not matched_pdids:
+    if not pdid_scores:
         return []
 
     # Fetch all matched documents
     pipe = r.pipeline()
-    for pdid in matched_pdids:
+    pdids_list = list(pdid_scores.keys())
+    for pdid in pdids_list:
         pipe.get(f"doc:pdid:{pdid}")
     results = pipe.execute()
 
     docs = []
-    for raw in results:
+    for i, raw in enumerate(results):
         if raw:
             try:
-                docs.append(json.loads(raw))
+                doc = json.loads(raw)
+                doc['_match_score'] = pdid_scores[pdids_list[i]]
+                docs.append(doc)
             except Exception:
                 pass
 
-    # Sort by updated_timestamp descending
-    docs.sort(key=lambda d: d.get('updated_timestamp', ''), reverse=True)
+    # Sort by match score (highest first), then by timestamp
+    docs.sort(key=lambda d: (d.get('_match_score', 0), d.get('updated_timestamp', '')), reverse=True)
     return docs
 
 
