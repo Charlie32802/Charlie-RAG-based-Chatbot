@@ -33,8 +33,8 @@ MAX_MESSAGE_LENGTH      = int(os.getenv('MAX_MESSAGE_LENGTH',      2000))
 MAX_HISTORY_MESSAGES    = int(os.getenv('MAX_HISTORY_MESSAGES',    7))
 MAX_HISTORY_CHARS       = int(os.getenv('MAX_HISTORY_CHARS',       4000))
 MAX_RESPONSE_TOKENS     = int(os.getenv('MAX_RESPONSE_TOKENS',     4096))
-SAFE_TOTAL_PROMPT_CHARS = int(os.getenv('SAFE_TOTAL_PROMPT_CHARS', 26000))
-OLLAMA_NUM_CTX          = int(os.getenv('OLLAMA_NUM_CTX',          14336))
+SAFE_TOTAL_PROMPT_CHARS = int(os.getenv('SAFE_TOTAL_PROMPT_CHARS', 55000))
+OLLAMA_NUM_CTX          = int(os.getenv('OLLAMA_NUM_CTX',          32768))
 OLLAMA_TIMEOUT          = int(os.getenv('OLLAMA_TIMEOUT',          60))
 MIN_REQUEST_INTERVAL    = float(os.getenv('MIN_REQUEST_INTERVAL',  1.0))
 MAX_STORED_MESSAGES     = int(os.getenv('MAX_STORED_MESSAGES',     40))
@@ -103,7 +103,6 @@ async def _get_tracking_context_redis(message: str):
 
         tokens = set(re.findall(r'\w+', message.lower()))
         
-        # STRICT OVERT-MATCH: Charlie will ONLY track a document if the exact PDID or Slug is detected in the message.
         exact_matches = [d for d in docs if str(d.get('pdid', '')) in tokens or str(d.get('slug', '')) in tokens]
         
         if not exact_matches:
@@ -124,7 +123,6 @@ async def _get_tracking_context_redis(message: str):
             lines.append(f"• **Office:** {doc.get('office', '')}")
             lines.append(f"• **Agency:** {doc.get('agency', '')}")
             
-            # Clean up the subject field to extract brackets and handle newlines beautifully
             subject_raw = doc.get('subject', '') or ''
             subject_cleaned = re.sub(r'\[.*?\]', '', subject_raw).strip()
             bracket_matches = re.findall(r'\[(.*?)\]', subject_raw)
@@ -210,7 +208,6 @@ def _db_get_tracking_context_sqlite(message: str):
         lines.append(f"• **Office:** {doc.office}")
         lines.append(f"• **Agency:** {doc.agency}")
         
-        # Clean up the subject field to extract brackets and handle newlines beautifully
         subject_raw = doc.subject or ''
         subject_cleaned = re.sub(r'\[.*?\]', '', subject_raw).strip()
         bracket_matches = re.findall(r'\[(.*?)\]', subject_raw)
@@ -351,13 +348,8 @@ def _db_get_messages(session):
     return list(session.messages.all().order_by('-timestamp')[:MAX_HISTORY_MESSAGES])
 
 
-# ── FIX: Pre-save user message so it exists in DB before streaming begins.  ──
-# This guarantees the user message survives a stream abort, and ensures the
-# front-end receives a messageId immediately so the Edit button works even
-# when Charlie's response is stopped partway through.
 @sync_to_async
 def _db_save_user_message(session, user_message):
-    """Save user message immediately at stream start. Returns user_msg.id."""
     try:
         session.refresh_from_db()
     except ConversationSession.DoesNotExist:
@@ -370,7 +362,6 @@ def _db_save_user_message(session, user_message):
     return user_msg.id
 
 
-# ── Save both user + bot (used by non-streaming chat_api fallback only) ───────
 @sync_to_async
 def _db_save_message_exchange(session, user_message, bot_response, categories):
     try:
@@ -398,7 +389,6 @@ def _db_save_message_exchange(session, user_message, bot_response, categories):
     return user_msg.id, bot_msg.id
 
 
-# ── Save only bot response (used after message edit, and by streaming path) ───
 @sync_to_async
 def _db_save_bot_message_only(session, bot_response, categories):
     try:
@@ -423,7 +413,6 @@ def _db_save_bot_message_only(session, bot_response, categories):
     return bot_msg.id
 
 
-# ── Updated: includes message id ─────────────────────────────────────────────
 @sync_to_async
 def _db_get_history_for_load(session):
     msgs = session.messages.all().order_by('-timestamp')[:MAX_STORED_MESSAGES]
@@ -443,7 +432,6 @@ def _db_delete_session(session):
     session.delete()
 
 
-# ── Edit a user message and delete all subsequent messages ────────────────────
 @sync_to_async
 def _db_edit_message(session_key, message_id, new_content):
     try:
@@ -454,7 +442,6 @@ def _db_edit_message(session_key, message_id, new_content):
         message.content = new_content
         message.save()
 
-        # Delete everything after this message
         ConversationMessage.objects.filter(
             session=session,
             timestamp__gt=message.timestamp
@@ -468,10 +455,8 @@ def _db_edit_message(session_key, message_id, new_content):
         return False
 
 
-# ── Get history excluding the most recent user message ────────────────────────
 @sync_to_async
 def _db_get_messages_for_regen(session):
-    """Returns (history_messages, last_user_content) for regeneration after edit."""
     all_msgs = list(
         session.messages.all().order_by('-timestamp')[:MAX_HISTORY_MESSAGES + 2]
     )
@@ -480,7 +465,7 @@ def _db_get_messages_for_regen(session):
 
     for msg in all_msgs:
         if msg.role == 'user' and last_user_text is None:
-            last_user_text = msg.content  # capture the edited message
+            last_user_text = msg.content
         else:
             history_msgs.append(msg)
 
@@ -627,19 +612,12 @@ async def chat_stream_api(request):
         async def event_stream():
             full_response = []
             try:
-                # ── FIX: Save user message FIRST, emit its ID before any tokens.   ──
-                # This means the user message exists in DB even if the stream is      ──
-                # aborted mid-way. The front-end sets userMsgDiv.dataset.messageId    ──
-                # as soon as this event arrives, so Edit works after a stop.          ──
                 user_msg_id = await _db_save_user_message(session, user_message)
                 if user_msg_id:
                     yield f"data: {json.dumps({'user_message_id': user_msg_id})}\n\n"
 
                 if ctx.get('tracking_instant_response'):
-                    # Bypass LLM directly for tracking data!
                     complete_response = ctx['tracking_instant_response']
-                    
-                    # Yield chunks quickly to simulate typing without the LLM wait
                     chunks = complete_response.split('\n')
                     for chunk in chunks:
                         yield f"data: {json.dumps({'token': chunk + '\n'})}\n\n"
@@ -675,7 +653,6 @@ async def chat_stream_api(request):
                 complete_response = (
                     _clean_response(''.join(full_response).strip()) or ERR_EMPTY
                 )
-                # ── User message already saved above; save bot message only ──────
                 bot_msg_id = await _db_save_bot_message_only(
                     session, complete_response, categories
                 )
@@ -710,7 +687,7 @@ async def chat_stream_api(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 async def chat_api(request):
-    """Non-streaming fallback. Uses _db_save_message_exchange (saves both at once)."""
+
     session = None
     try:
         session_key = request.session.session_key or 'unknown'
@@ -778,7 +755,6 @@ async def delete_conversation_api(request):
         return JsonResponse({'error': 'Failed to delete'}, status=500)
 
 
-# ── Edit a user message and delete all subsequent messages ────────────────────
 @csrf_exempt
 @require_http_methods(["POST"])
 async def edit_message_api(request):
@@ -814,7 +790,6 @@ async def edit_message_api(request):
         return JsonResponse({'error': ERR_GENERIC}, status=500)
 
 
-# ── Regenerate Charlie's response after a message edit ───────────────────────
 @csrf_exempt
 @require_http_methods(["POST"])
 async def regenerate_response_api(request):
@@ -827,7 +802,6 @@ async def regenerate_response_api(request):
         session = await get_or_create_session(request)
         _processing_sessions.add(session.session_key)
 
-        # Get history (excluding last user msg) + the last user message content
         history_msgs, user_message = await _db_get_messages_for_regen(session)
 
         if not user_message:
@@ -942,8 +916,6 @@ async def regenerate_response_api(request):
 async def save_partial_bot_message_api(request):
     try:
         data         = json.loads(request.body)
-        # Apply the same bullet/spacing cleanup used on full responses so that
-        # partial (stopped) responses are stored with "•" not raw "* " asterisks.
         partial_text = _clean_response(data.get('partial_text', '').strip())
 
         if not partial_text:

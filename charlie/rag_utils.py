@@ -11,7 +11,11 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 CHROMA_DIR = BASE_DIR / "chromadb"
 
-CONTEXT_BUDGET = int(os.getenv('CONTEXT_BUDGET', 24000))
+CONTEXT_BUDGET            = int(os.getenv('CONTEXT_BUDGET',             32000))
+SMALL_DOC_THRESHOLD       = int(os.getenv('SMALL_DOC_THRESHOLD',        15))
+SMALL_DOC_GUARANTEE       = int(os.getenv('SMALL_DOC_GUARANTEE',        4000))
+LARGE_DOC_RELEVANCE_FLOOR = float(os.getenv('LARGE_DOC_RELEVANCE_FLOOR', 0.05))
+RELEVANCE_FLOOR_RATIO     = float(os.getenv('RELEVANCE_FLOOR_RATIO',    0.10))
 
 _client = None
 _collection = None
@@ -98,14 +102,25 @@ def _bm25_search(query, n_results=50):
 def _score_text_against_query(text, query_tokens):
     if not query_tokens:
         return 0.0
+
+    meaningful = [qt for qt in query_tokens if len(qt) >= 3]
+    if not meaningful:
+        return 0.0
+
     chunk_tokens = set(_tokenize(text))
     hits = 0.0
-    for qt in query_tokens:
+
+    for qt in meaningful:
         if qt in chunk_tokens:
             hits += 1.0
+        elif qt.endswith('s') and len(qt) > 3 and qt[:-1] in chunk_tokens:
+            hits += 0.8
+        elif qt + 's' in chunk_tokens:
+            hits += 0.8
         elif len(qt) >= 5 and any(ct.startswith(qt[:5]) for ct in chunk_tokens):
             hits += 0.5
-    return hits / len(query_tokens)
+
+    return hits / len(meaningful)
 
 
 def _reciprocal_rank_fusion(semantic_results, bm25_results, k=60):
@@ -194,7 +209,13 @@ def _extract_section_title(text):
 
 def chunk_text_smart(text, chunk_size=3000, overlap=200):
     chunks = []
-    sections = re.split(r'═{51,}', text)
+
+    if re.search(r'═{20,}', text):
+        sections = re.split(r'═{20,}', text)
+    elif re.search(r'={50,}', text):
+        sections = re.split(r'={50,}', text)
+    else:
+        sections = [text]
 
     for section in sections:
         section = section.strip()
@@ -467,35 +488,78 @@ def format_rag_results(rag_results, query_info=None, query=""):
         return "", 0
 
     query_tokens = set(_tokenize(query)) if query else set()
-
     for chunk in rag_results:
         overlap = _score_text_against_query(chunk.get('content', ''), query_tokens)
         chunk['final_score'] = chunk.get('rrf_score', 0.0) + (overlap * 0.4)
 
-    sorted_chunks = sorted(rag_results, key=lambda r: r['final_score'], reverse=True)
+    max_score = max(c['final_score'] for c in rag_results)
+    floor = max_score * RELEVANCE_FLOOR_RATIO
+    rag_results = [c for c in rag_results if c['final_score'] >= floor]
+
+    doc_chunks = {}
+    for chunk in rag_results:
+        doc_id = chunk['metadata'].get('document_id')
+        if doc_id not in doc_chunks:
+            doc_chunks[doc_id] = []
+        doc_chunks[doc_id].append(chunk)
+
+    for doc_id in doc_chunks:
+        doc_chunks[doc_id].sort(key=lambda r: r['final_score'], reverse=True)
 
     seen_indices = set()
-    context = ""
+    selected = []
     chars_so_far = 0
 
-    for chunk in sorted_chunks:
+    for doc_id, chunks in doc_chunks.items():
+        total_chunks = chunks[0]['metadata'].get('total_chunks', 99)
+        if total_chunks >= SMALL_DOC_THRESHOLD:
+            continue
+        ordered = sorted(chunks, key=lambda c: c['metadata'].get('chunk_index', 0))
+        doc_chars = 0
+        for chunk in ordered:
+            key = (chunk['metadata'].get('document_id'), chunk['metadata'].get('chunk_index'))
+            content = chunk['content']
+            if key in seen_indices:
+                continue
+            if doc_chars + len(content) + 2 > SMALL_DOC_GUARANTEE:
+                continue
+            if chars_so_far + len(content) + 2 > CONTEXT_BUDGET:
+                break
+            seen_indices.add(key)
+            selected.append(chunk)
+            chars_so_far += len(content) + 2
+            doc_chars += len(content) + 2
+
+    remaining = sorted(rag_results, key=lambda r: r['final_score'], reverse=True)
+    for chunk in remaining:
         key = (chunk['metadata'].get('document_id'), chunk['metadata'].get('chunk_index'))
         content = chunk['content']
-
         if key in seen_indices:
             continue
         if chars_so_far + len(content) + 2 > CONTEXT_BUDGET:
             continue
-
         seen_indices.add(key)
-        context += content + "\n\n"
+        selected.append(chunk)
         chars_so_far += len(content) + 2
 
-    context = context.strip()
+    doc_groups = {}
+    for chunk in selected:
+        doc_id = chunk['metadata'].get('document_id')
+        if doc_id not in doc_groups:
+            doc_groups[doc_id] = []
+        doc_groups[doc_id].append(chunk)
 
+    context_parts = []
+    for doc_id, chunks in doc_groups.items():
+        chunks.sort(key=lambda c: c['metadata'].get('chunk_index', 0))
+        for chunk in chunks:
+            section = chunk['metadata'].get('section_title', '')
+            prefix = f"[SECTION: {section}]\n" if section else ""
+            context_parts.append(prefix + chunk['content'])
+
+    context = "\n\n".join(context_parts).strip()
     heading_block = extract_headings_from_context(context)
     item_count = _count_list_items_in_text(context)
-
     return (heading_block + context) if heading_block else context, item_count
 
 
@@ -563,7 +627,24 @@ def search_documents(query, n_results=50, category_filter=None, query_info=None)
             doc_id = r['metadata'].get('document_id')
             doc_chunk_counts[doc_id] = doc_chunk_counts.get(doc_id, 0) + 1
 
-        expanded_doc_ids = set(doc_chunk_counts.keys())
+        def _get_expansion_threshold(doc_id, collection):
+            try:
+                result = collection.get(
+                    where={"document_id": doc_id},
+                    include=["metadatas"],
+                    limit=1
+                )
+                if result['metadatas']:
+                    total = result['metadatas'][0].get('total_chunks', 99)
+                    return 1 if total < SMALL_DOC_THRESHOLD else 3
+            except Exception:
+                pass
+            return 3
+
+        expanded_doc_ids = {
+            doc_id for doc_id, count in doc_chunk_counts.items()
+            if count >= _get_expansion_threshold(doc_id, get_collection())
+        }
         existing_chunk_keys = {
             (r['metadata'].get('document_id'), r['metadata'].get('chunk_index'))
             for r in combined_results
@@ -578,24 +659,34 @@ def search_documents(query, n_results=50, category_filter=None, query_info=None)
                     ]},
                     include=["documents", "metadatas"]
                 )
+                query_tokens = set(_tokenize(query))
+                total_doc_chunks = len(all_doc_data['documents'])
+                is_small_doc = total_doc_chunks < SMALL_DOC_THRESHOLD
+
                 for i, doc in enumerate(all_doc_data['documents']):
                     meta = all_doc_data['metadatas'][i]
                     key = (doc_id, meta.get('chunk_index', -1))
                     if key not in existing_chunk_keys:
-                        combined_results.append({
-                            'content': doc,
-                            'title': meta.get('title', 'Unknown'),
-                            'category': meta.get('category', 'Unknown'),
-                            'chunk_size': meta.get('chunk_size', len(doc)),
-                            'rrf_score': 0.001,
-                            'relevance_score': 0.5,
-                            'metadata': meta,
-                            'source': 'auto_expanded',
-                        })
-                        existing_chunk_keys.add(key)
+                        relevance = _score_text_against_query(doc, query_tokens)
+                        relevance_threshold = 0.0 if is_small_doc else LARGE_DOC_RELEVANCE_FLOOR
+
+                        if relevance > relevance_threshold:
+                            combined_results.append({
+                                'content': doc,
+                                'title': meta.get('title', 'Unknown'),
+                                'category': meta.get('category', 'Unknown'),
+                                'chunk_size': meta.get('chunk_size', len(doc)),
+                                'rrf_score': 0.001 + (relevance * 0.3),
+                                'relevance_score': relevance,
+                                'metadata': meta,
+                                'source': 'auto_expanded',
+                            })
+                            existing_chunk_keys.add(key)
+
                 logger.info(
                     f"Auto-expanded '{doc_id}': "
-                    f"{len(all_doc_data['documents'])} total chunks fetched"
+                    f"{len(all_doc_data['documents'])} total chunks fetched "
+                    f"({'small' if is_small_doc else 'large'} doc)"
                 )
             except Exception as exc:
                 logger.warning(f"Auto-expansion fetch failed for '{doc_id}': {exc}")

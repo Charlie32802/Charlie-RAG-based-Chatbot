@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_HOST  = os.getenv('OLLAMA_HOST',  'localhost')
 OLLAMA_PORT  = os.getenv('OLLAMA_PORT',  '11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b-instruct-q6_K')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b-instruct-q5_K_M')
 
 
 def preload_ollama_model():
