@@ -521,17 +521,16 @@ async def get_or_create_session(request):
 
 async def get_relevant_context(user_message):
     stats = await asyncio.to_thread(get_collection_stats)
-    if not stats or stats['total_chunks'] == 0:
+    if not stats or stats.get('total_chunks', 0) == 0:
         return '', [], 0
 
     try:
-        results = await asyncio.to_thread(search_documents, user_message, RAG_SEARCH_RESULTS)
-        if not results:
-            return '', [], 0
-        categories  = list(set(r['category'] for r in results[:10]))
         context, item_count = await asyncio.to_thread(
-            format_rag_results, results, None, user_message
+            search_documents, user_message, RAG_SEARCH_RESULTS
         )
+        if not context:
+            return '', [], 0
+        categories = ['rag']
         return context, categories, item_count
     except Exception as e:
         logger.error(f"RAG error: {e}")
