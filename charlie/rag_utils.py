@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 CHROMA_DIR = BASE_DIR / "chromadb"
 
-CONTEXT_BUDGET            = int(os.getenv('CONTEXT_BUDGET',             32000))
+CONTEXT_BUDGET            = int(os.getenv('CONTEXT_BUDGET',             100000))
 SMALL_DOC_THRESHOLD       = int(os.getenv('SMALL_DOC_THRESHOLD',        15))
 SMALL_DOC_GUARANTEE       = int(os.getenv('SMALL_DOC_GUARANTEE',        4000))
 LARGE_DOC_RELEVANCE_FLOOR = float(os.getenv('LARGE_DOC_RELEVANCE_FLOOR', 0.05))

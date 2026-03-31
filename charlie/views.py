@@ -33,14 +33,14 @@ MAX_MESSAGE_LENGTH      = int(os.getenv('MAX_MESSAGE_LENGTH',      2000))
 MAX_HISTORY_MESSAGES    = int(os.getenv('MAX_HISTORY_MESSAGES',    7))
 MAX_HISTORY_CHARS       = int(os.getenv('MAX_HISTORY_CHARS',       4000))
 MAX_RESPONSE_TOKENS     = int(os.getenv('MAX_RESPONSE_TOKENS',     4096))
-SAFE_TOTAL_PROMPT_CHARS = int(os.getenv('SAFE_TOTAL_PROMPT_CHARS', 55000))
+SAFE_TOTAL_PROMPT_CHARS = int(os.getenv('SAFE_TOTAL_PROMPT_CHARS', 120000))
 OLLAMA_NUM_CTX          = int(os.getenv('OLLAMA_NUM_CTX',          32768))
 OLLAMA_TIMEOUT          = int(os.getenv('OLLAMA_TIMEOUT',          60))
 MIN_REQUEST_INTERVAL    = float(os.getenv('MIN_REQUEST_INTERVAL',  1.0))
 MAX_STORED_MESSAGES     = int(os.getenv('MAX_STORED_MESSAGES',     40))
 OLLAMA_TEMPERATURE      = float(os.getenv('OLLAMA_TEMPERATURE',    0.3))
 
-RAG_SEARCH_RESULTS      = int(os.getenv('RAG_SEARCH_RESULTS',     50))
+RAG_SEARCH_RESULTS      = int(os.getenv('RAG_SEARCH_RESULTS',     150))
 
 ERR_TIMEOUT    = "This is taking longer than expected. Please try again."
 ERR_CONNECTION = "I'm having trouble connecting. Please try again in a moment."

@@ -70,23 +70,28 @@
       </div>
     </div>
 
-    <div class="input-container">
-      <button class="share-button" id="shareButton" title="Share conversation">
-        <img src="{% static 'images/share.png' %}" class="share-icon" alt="">
-        Share
-      </button>
-      <button class="delete-button" id="deleteButton">Delete Chat</button>
-      <textarea
-        class="chat-input"
-        id="chatInput"
-        placeholder="Type your message here..."
-        rows="1"
-      ></textarea>
-      <div class="action-buttons">
-        <button class="send-button" id="sendButton">&#10148;</button>
-        <button class="print-button" id="printButton" title="Print conversation">
-          <img src="{% static 'images/printer.png' %}" width="18" height="18" alt="Print">
+    <div class="bottom-area">
+      <div class="input-container" id="inputContainer">
+        <button class="share-button" id="shareButton" title="Share conversation">
+          <img src="{% static 'images/share.png' %}" class="share-icon" alt="">
+          Share
         </button>
+        <button class="delete-button" id="deleteButton">Delete Chat</button>
+        <textarea
+          class="chat-input"
+          id="chatInput"
+          placeholder="Type your message here..."
+          rows="1"
+        ></textarea>
+        <div class="action-buttons">
+          <button class="send-button" id="sendButton">&#10148;</button>
+          <button class="print-button" id="printButton" title="Print conversation">
+            <img src="{% static 'images/printer.png' %}" width="18" height="18" alt="Print">
+          </button>
+        </div>
+      </div>
+      <div class="disclaimer-text">
+        Charlie can make mistakes. Always verify important information.
       </div>
     </div>
 
