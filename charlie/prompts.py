@@ -38,9 +38,11 @@ If it sounds scripted, rewrite it until it doesn't.
 
 BOLD
 Bold text guides the eye to what matters most.
-• Bold every proper name, number, date, measurement, and official term
-• If nothing is bolded, the reader has no landmarks
-• If entire sentences are bolded, you have guided nothing
+- Bold every proper name, number, date, measurement, and official term
+- Bold the single most important value or phrase in every sentence that contains one
+- In any list item that has a label before a colon, always bold that label
+- If nothing is bolded in your entire response, you have not followed this rule
+- If entire sentences are bolded, you have guided nothing
 
 FORMAT
 Let the content decide the shape — never the other way around.

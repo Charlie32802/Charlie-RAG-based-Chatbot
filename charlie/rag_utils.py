@@ -1,4 +1,6 @@
 import os
+import pickle
+import hashlib
 import random
 from pathlib import Path
 import logging
@@ -11,11 +13,11 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 CHROMA_DIR = BASE_DIR / "chromadb"
 
-CONTEXT_BUDGET            = int(os.getenv('CONTEXT_BUDGET',             100000))
+CONTEXT_BUDGET            = int(os.getenv('CONTEXT_BUDGET',             25000))
 SMALL_DOC_THRESHOLD       = int(os.getenv('SMALL_DOC_THRESHOLD',        15))
 SMALL_DOC_GUARANTEE       = int(os.getenv('SMALL_DOC_GUARANTEE',        4000))
-LARGE_DOC_RELEVANCE_FLOOR = float(os.getenv('LARGE_DOC_RELEVANCE_FLOOR', 0.05))
-RELEVANCE_FLOOR_RATIO     = float(os.getenv('RELEVANCE_FLOOR_RATIO',    0.10))
+LARGE_DOC_RELEVANCE_FLOOR = float(os.getenv('LARGE_DOC_RELEVANCE_FLOOR', 0.15))
+RELEVANCE_FLOOR_RATIO     = float(os.getenv('RELEVANCE_FLOOR_RATIO',    0.15))
 
 _client = None
 _collection = None
@@ -37,7 +39,8 @@ def initialize_rag_system():
         )
 
         from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer('all-MiniLM-L6-v2')
+        _embedder = SentenceTransformer(os.getenv('EMBEDDING_MODEL', 'BAAI/bge-m3'))
+        logger.info(f"Loaded embedding model: {os.getenv('EMBEDDING_MODEL', 'BAAI/bge-m3')}")
 
         _build_bm25_index()
 
@@ -60,6 +63,8 @@ def _tokenize(text):
     return re.findall(r'\w+', text.lower())
 
 
+BM25_CACHE_PATH = BASE_DIR / "bm25_index.pkl"
+
 def _build_bm25_index():
     global _bm25_index, _bm25_documents, _bm25_metadatas
 
@@ -70,10 +75,38 @@ def _build_bm25_index():
         )
         if not all_data['documents']:
             return
+
+        fingerprint = hashlib.md5(
+            ''.join(all_data['documents']).encode()
+        ).hexdigest()
+
+        if BM25_CACHE_PATH.exists():
+            try:
+                with open(BM25_CACHE_PATH, 'rb') as f:
+                    cached = pickle.load(f)
+                if cached.get('fingerprint') == fingerprint:
+                    _bm25_documents = cached['documents']
+                    _bm25_metadatas = cached['metadatas']
+                    _bm25_index     = cached['index']
+                    logger.info("BM25: loaded from disk cache")
+                    return
+            except Exception as e:
+                logger.warning(f"BM25 cache load failed: {e} — rebuilding")
+
         _bm25_documents = all_data['documents']
         _bm25_metadatas = all_data['metadatas']
-        tokenized_docs = [_tokenize(doc) for doc in _bm25_documents]
-        _bm25_index = BM25Okapi(tokenized_docs)
+        tokenized_docs  = [_tokenize(doc) for doc in _bm25_documents]
+        _bm25_index     = BM25Okapi(tokenized_docs)
+
+        with open(BM25_CACHE_PATH, 'wb') as f:
+            pickle.dump({
+                'fingerprint': fingerprint,
+                'documents':   _bm25_documents,
+                'metadatas':   _bm25_metadatas,
+                'index':       _bm25_index,
+            }, f)
+        logger.info(f"BM25: rebuilt and saved ({len(_bm25_documents)} chunks)")
+
     except Exception as e:
         logger.error(f"BM25 index error: {e}")
 

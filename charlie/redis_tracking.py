@@ -102,8 +102,12 @@ def search_documents(message: str):
     Returns list of document dicts ordered by match score and timestamp.
     """
     r = get_redis()
+    
+    # Extract distinct identifiers instead of every single dictionary word
+    # This prevents loading the entire database into memory if the user says "track document"
     tokens = re.findall(r'\w+', message.lower())
-
+    alobs_matches = re.findall(r'\b\d{4}-\d{2}-\d{2}-\d{3}\b', message.lower())
+    
     pdid_scores = {}
 
     for token in tokens:
@@ -124,15 +128,18 @@ def search_documents(message: str):
                     token_matches.add(num)
                 token_matches.update(r.smembers(f"idx:slug:{num}"))
 
-        # Text token - search all text indexes
-        if len(token) >= 4:
-            for prefix in ['idx:title:', 'idx:subject:', 'idx:office:',
-                           'idx:agency:', 'idx:doctype:', 'idx:createdby:']:
-                token_matches.update(r.smembers(f"{prefix}{token}"))
-                
         # Scored hits: documents that match multiple words get a higher score
         for pdid in token_matches:
             pdid_scores[pdid] = pdid_scores.get(pdid, 0) + 1
+
+    # Also search parts of ALOBS ids to ensure they get matched
+    for alobs in alobs_matches:
+        parts = alobs.split('-')
+        for part in parts:
+            token_matches = r.smembers(f"idx:slug:{part}")
+            token_matches.update(r.smembers(f"idx:subject:{part}"))
+            for pdid in token_matches:
+                pdid_scores[pdid] = pdid_scores.get(pdid, 0) + 1
 
     if not pdid_scores:
         return []

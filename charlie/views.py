@@ -39,8 +39,7 @@ OLLAMA_TIMEOUT          = int(os.getenv('OLLAMA_TIMEOUT',          60))
 MIN_REQUEST_INTERVAL    = float(os.getenv('MIN_REQUEST_INTERVAL',  1.0))
 MAX_STORED_MESSAGES     = int(os.getenv('MAX_STORED_MESSAGES',     40))
 OLLAMA_TEMPERATURE      = float(os.getenv('OLLAMA_TEMPERATURE',    0.3))
-
-RAG_SEARCH_RESULTS      = int(os.getenv('RAG_SEARCH_RESULTS',     150))
+RAG_SEARCH_RESULTS      = int(os.getenv('RAG_SEARCH_RESULTS',      50))
 
 ERR_TIMEOUT    = "This is taking longer than expected. Please try again."
 ERR_CONNECTION = "I'm having trouble connecting. Please try again in a moment."
@@ -90,7 +89,32 @@ def _get_next_shuffled_opener(count: int) -> str:
     return selected + "\n"
 
 
+def _extract_tracking_numbers(message: str):
+    msg_lower = message.lower()
+    
+    tracking_keywords = {
+        'track', 'tracking', 'status', 'pdid', 'alobs', 'document', 
+        'where is', 'routing', 'purchase request', 'purchase order', 'record'
+    }
+    
+    has_intent = any(kw in msg_lower for kw in tracking_keywords)
+    alobs_matches = set(re.findall(r'\b\d{4}-\d{2}-\d{2}-\d{3}\b', msg_lower))
+    
+    if not has_intent and not alobs_matches:
+        return set(), set()
+        
+    pdid_matches = set()
+    if has_intent:
+        pdid_matches = set(re.findall(r'\b\d{4,}\b', message))
+        
+    return pdid_matches, alobs_matches
+
+
 async def _get_tracking_context_redis(message: str):
+    pdids, alobs = _extract_tracking_numbers(message)
+    if not pdids and not alobs:
+        return '', 0
+
     try:
         from .redis_tracking import search_documents as redis_search, redis_available
         if not redis_available():
@@ -101,9 +125,17 @@ async def _get_tracking_context_redis(message: str):
         if not docs:
             return '', 0
 
-        tokens = set(re.findall(r'\w+', message.lower()))
-        
-        exact_matches = [d for d in docs if str(d.get('pdid', '')) in tokens or str(d.get('slug', '')) in tokens]
+        exact_matches = []
+        for d in docs:
+            d_pdid = str(d.get('pdid', ''))
+            if d_pdid and d_pdid in pdids:
+                exact_matches.append(d)
+                continue
+                
+            d_slug = str(d.get('slug', ''))
+            d_subject = str(d.get('subject', ''))
+            if alobs and any(a in d_slug or a in d_subject for a in alobs):
+                exact_matches.append(d)
         
         if not exact_matches:
             return '', 0
@@ -171,13 +203,19 @@ def _db_get_tracking_context_sqlite(message: str):
     from .models import TrackedDocument
     from django.db.models import Q
 
-    numbers_in_message = set(re.findall(r'\d+', message))
-    if not numbers_in_message:
+    pdids, alobs = _extract_tracking_numbers(message)
+    if not pdids and not alobs:
         return '', 0
 
     q = Q()
-    for num in numbers_in_message:
-        q |= Q(pdid=int(num)) | Q(slug__icontains=num)
+    for num in pdids:
+        try:
+            q |= Q(pdid=int(num))
+        except ValueError:
+            pass
+            
+    for a in alobs:
+        q |= Q(subject__icontains=a)
 
     if not q.children:
         return '', 0
@@ -263,6 +301,9 @@ def _clean_response(text):
             line = re.sub(r'^\+\s+',       '• ', line)
             line = re.sub(r'^-(?!-)\s+',   '• ', line)
             pass1.append(line)
+
+        pass1[-1] = re.sub(r'^(•\s+)(?!\*\*)([^:\n]{3,60}):\s+',     r'\1**\2**: ', pass1[-1])
+        pass1[-1] = re.sub(r'^(\d+\.\s+)(?!\*\*)([^:\n]{3,60}):\s+', r'\1**\2**: ', pass1[-1])
 
     pass2 = []
     i = 0
