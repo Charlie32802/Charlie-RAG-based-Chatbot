@@ -1,9 +1,10 @@
-asgiref==3.10.0
 Django==6.0.3
 httpx==0.28.1
 pypdf==6.9.2
+python-docx==1.2.0
 python-dotenv==1.2.2
-python_docx==1.2.0
 pytz==2025.2
 redis==7.4.0
-Requests==2.33.1
+requests==2.33.1
+uvicorn[standard]==0.42.0
+whitenoise==6.12.0
