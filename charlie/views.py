@@ -39,7 +39,7 @@ OLLAMA_TIMEOUT          = int(os.getenv('OLLAMA_TIMEOUT',          60))
 MIN_REQUEST_INTERVAL    = float(os.getenv('MIN_REQUEST_INTERVAL',  1.0))
 MAX_STORED_MESSAGES     = int(os.getenv('MAX_STORED_MESSAGES',     40))
 OLLAMA_TEMPERATURE      = float(os.getenv('OLLAMA_TEMPERATURE',    0.3))
-RAG_SEARCH_RESULTS      = int(os.getenv('RAG_SEARCH_RESULTS',      50))
+RAG_SEARCH_RESULTS      = int(os.getenv('RAG_SEARCH_RESULTS',      150))
 
 ERR_TIMEOUT    = "This is taking longer than expected. Please try again."
 ERR_CONNECTION = "I'm having trouble connecting. Please try again in a moment."
@@ -64,49 +64,49 @@ _tracking_openers = [
 ]
 
 _shuffle_state = {
-    'list': [],
+    'list':  [],
     'index': 0,
-    'lock': threading.Lock()
+    'lock':  threading.Lock()
 }
 
 def _get_next_shuffled_opener(count: int) -> str:
     with _shuffle_state['lock']:
         shuffled = _shuffle_state['list']
-        idx = _shuffle_state['index']
-        
+        idx      = _shuffle_state['index']
+
         if not shuffled or idx >= len(shuffled):
             shuffled = _tracking_openers.copy()
             random.shuffle(shuffled)
-            _shuffle_state['list'] = shuffled
+            _shuffle_state['list']  = shuffled
             idx = 0
-            
-        selected = shuffled[idx]
+
+        selected             = shuffled[idx]
         _shuffle_state['index'] = idx + 1
-        
+
     if count > 1:
         return f"I found {count} tracking records related to your search. {selected}\n"
-        
+
     return selected + "\n"
 
 
 def _extract_tracking_numbers(message: str):
     msg_lower = message.lower()
-    
+
     tracking_keywords = {
-        'track', 'tracking', 'status', 'pdid', 'alobs', 'document', 
+        'track', 'tracking', 'status', 'pdid', 'alobs', 'document',
         'where is', 'routing', 'purchase request', 'purchase order', 'record'
     }
-    
-    has_intent = any(kw in msg_lower for kw in tracking_keywords)
+
+    has_intent    = any(kw in msg_lower for kw in tracking_keywords)
     alobs_matches = set(re.findall(r'\b\d{4}-\d{2}-\d{2}-\d{3}\b', msg_lower))
-    
+
     if not has_intent and not alobs_matches:
         return set(), set()
-        
+
     pdid_matches = set()
     if has_intent:
         pdid_matches = set(re.findall(r'\b\d{4,}\b', message))
-        
+
     return pdid_matches, alobs_matches
 
 
@@ -131,21 +131,20 @@ async def _get_tracking_context_redis(message: str):
             if d_pdid and d_pdid in pdids:
                 exact_matches.append(d)
                 continue
-                
-            d_slug = str(d.get('slug', ''))
+
+            d_slug    = str(d.get('slug', ''))
             d_subject = str(d.get('subject', ''))
             if alobs and any(a in d_slug or a in d_subject for a in alobs):
                 exact_matches.append(d)
-        
+
         if not exact_matches:
             return '', 0
-            
+
         docs = exact_matches[:3]
 
         if not docs:
             return '', 0
 
-        doc_title = docs[0].get('title', 'Document') if docs else ''
         lines = [_get_next_shuffled_opener(len(docs))]
         for doc in docs:
             status = 'Completed' if doc.get('document_completed_status') else 'In progress'
@@ -154,11 +153,11 @@ async def _get_tracking_context_redis(message: str):
             lines.append(f"• **Type:** {doc.get('document_type', '')}")
             lines.append(f"• **Office:** {doc.get('office', '')}")
             lines.append(f"• **Agency:** {doc.get('agency', '')}")
-            
-            subject_raw = doc.get('subject', '') or ''
+
+            subject_raw     = doc.get('subject', '') or ''
             subject_cleaned = re.sub(r'\[.*?\]', '', subject_raw).strip()
             bracket_matches = re.findall(r'\[(.*?)\]', subject_raw)
-            
+
             sub_lines = [line.strip() for line in subject_cleaned.split('\n') if line.strip()]
             if sub_lines:
                 lines.append(f"• **Subject:** {sub_lines[0]}")
@@ -170,11 +169,11 @@ async def _get_tracking_context_redis(message: str):
                         lines.append(f"• {extra_line}")
             else:
                 lines.append(f"• **Subject:** None")
-                
+
             for bracket in bracket_matches:
                 k_v = bracket.split(':', 1)
                 lines.append(f"• **{k_v[0].strip()}:** {k_v[1].strip() if len(k_v) > 1 else ''}")
-            
+
             lines.append(f"• **Status:** {status}")
             if doc.get('current_location') and doc['current_location'] != 'Unknown':
                 lines.append(f"• **Current location:** {doc['current_location']}")
@@ -213,7 +212,7 @@ def _db_get_tracking_context_sqlite(message: str):
             q |= Q(pdid=int(num))
         except ValueError:
             pass
-            
+
     for a in alobs:
         q |= Q(subject__icontains=a)
 
@@ -232,8 +231,8 @@ def _db_get_tracking_context_sqlite(message: str):
 
     lines = [_get_next_shuffled_opener(len(docs))]
     for doc in docs:
-        status = 'Completed' if doc.document_completed_status else 'In progress'
-        location = doc.get_current_location()
+        status     = 'Completed' if doc.document_completed_status else 'In progress'
+        location   = doc.get_current_location()
         last_action = doc.get_last_action()
         try:
             route_count = len(doc.details.get('routes', []))
@@ -245,11 +244,11 @@ def _db_get_tracking_context_sqlite(message: str):
         lines.append(f"• **Type:** {doc.document_type}")
         lines.append(f"• **Office:** {doc.office}")
         lines.append(f"• **Agency:** {doc.agency}")
-        
-        subject_raw = doc.subject or ''
+
+        subject_raw     = doc.subject or ''
         subject_cleaned = re.sub(r'\[.*?\]', '', subject_raw).strip()
         bracket_matches = re.findall(r'\[(.*?)\]', subject_raw)
-        
+
         sub_lines = [line.strip() for line in subject_cleaned.split('\n') if line.strip()]
         if sub_lines:
             lines.append(f"• **Subject:** {sub_lines[0]}")
@@ -261,11 +260,11 @@ def _db_get_tracking_context_sqlite(message: str):
                     lines.append(f"• {extra_line}")
         else:
             lines.append(f"• **Subject:** None")
-            
+
         for bracket in bracket_matches:
             k_v = bracket.split(':', 1)
             lines.append(f"• **{k_v[0].strip()}:** {k_v[1].strip() if len(k_v) > 1 else ''}")
-            
+
         lines.append(f"• **Status:** {status}")
         lines.append(f"• **Current location:** {location}")
         if last_action:
@@ -522,11 +521,16 @@ async def get_or_create_session(request):
 async def get_relevant_context(user_message):
     stats = await asyncio.to_thread(get_collection_stats)
     if not stats or stats.get('total_chunks', 0) == 0:
+        logger.warning(f"RAG skipped — stats returned: {stats}")
         return '', [], 0
 
     try:
         context, item_count = await asyncio.to_thread(
             search_documents, user_message, RAG_SEARCH_RESULTS
+        )
+        logger.info(
+            f"RAG result — chars: {len(context)}, list_items: {item_count} | "
+            f"preview: {context[:200].encode('ascii', 'replace').decode()!r}"
         )
         if not context:
             return '', [], 0
@@ -598,7 +602,15 @@ async def _prepare_chat_context(request, user_message):
                 f"— proceeding without history"
             )
 
-    logger.info(f"Final prompt size: {total_chars} chars (~{total_chars // 4} tokens)")
+    # ── Detailed prompt breakdown for debugging context issues ────────────────
+    system_chars  = len(str(system_prompt.get('content', '')))
+    history_chars = sum(len(str(m.get('content', ''))) for m in history)
+    user_chars    = len(user_message)
+    logger.info(
+        f"Prompt breakdown — system: {system_chars} | rag_context: {len(rag_context)} | "
+        f"history: {history_chars} | user_msg: {user_chars} | total: {total_chars}"
+    )
+
     return {'session': session, 'messages': messages, 'categories': categories}
 
 
@@ -660,9 +672,9 @@ async def chat_stream_api(request):
                     complete_response = ctx['tracking_instant_response']
                     chunks = complete_response.split('\n')
                     for chunk in chunks:
-                        yield f"data: {json.dumps({'token': chunk + '\n'})}\n\n"
+                        yield f"data: {json.dumps({'token': chunk + chr(10)})}\n\n"
                         await asyncio.sleep(0.02)
-                    
+
                     bot_msg_id = await _db_save_bot_message_only(
                         session, complete_response, categories
                     )
@@ -720,14 +732,13 @@ async def chat_stream_api(request):
     except Exception as e:
         logger.error(f"Stream chat setup error: {e}", exc_info=True)
         if session:
-            _processing_sessions.discard(session.session_key)
+            _processing_essions.discard(session.session_key)
         return JsonResponse({'error': ERR_GENERIC}, status=500)
 
 
 @csrf_exempt
 @require_http_methods(["POST"])
 async def chat_api(request):
-
     session = None
     try:
         session_key = request.session.session_key or 'unknown'
@@ -860,7 +871,6 @@ async def regenerate_response_api(request):
             get_relevant_context(user_message),
         )
 
-
         system_prompt = get_system_prompt(
             relevant_context=rag_context,
             tracking_context='',
@@ -883,15 +893,24 @@ async def regenerate_response_api(request):
                 trimmed.pop(0)
             messages = [system_prompt] + trimmed + [{'role': 'user', 'content': user_message}]
 
+        # ── Detailed prompt breakdown for regen ───────────────────────────────
+        system_chars  = len(str(system_prompt.get('content', '')))
+        history_chars = sum(len(str(m.get('content', ''))) for m in history)
+        logger.info(
+            f"Regen prompt breakdown — system: {system_chars} | rag_context: {len(rag_context)} | "
+            f"history: {history_chars} | user_msg: {len(user_message)} | "
+            f"total: {_total_chars(messages)}"
+        )
+
         async def event_stream():
             full_response = []
             try:
                 if tracking_hits > 0:
                     chunks = tracking_context.split('\n')
                     for chunk in chunks:
-                        yield f"data: {json.dumps({'token': chunk + '\n'})}\n\n"
+                        yield f"data: {json.dumps({'token': chunk + chr(10)})}\n\n"
                         await asyncio.sleep(0.01)
-                    
+
                     bot_msg_id = await _db_save_bot_message_only(
                         session, tracking_context, ['tracking']
                     )
