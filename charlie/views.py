@@ -528,10 +528,7 @@ async def get_relevant_context(user_message):
         context, item_count = await asyncio.to_thread(
             search_documents, user_message, RAG_SEARCH_RESULTS
         )
-        logger.info(
-            f"RAG result — chars: {len(context)}, list_items: {item_count} | "
-            f"preview: {context[:200].encode('ascii', 'replace').decode()!r}"
-        )
+        logger.info(f"RAG result loaded — length: {len(context)} chars")
         if not context:
             return '', [], 0
         categories = ['rag']
