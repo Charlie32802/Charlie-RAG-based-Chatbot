@@ -19,7 +19,7 @@ const funFacts = [
     "Nickel is our provincial metal, we're rich in minerals! ⛏️",
     "Our population is 485,088 people! That's a lot of friends! 👥",
     "We speak Cebuano, Surigaonon, Boholano, and more! 🗣️",
-    "I was created by Marc Daryll Trinidad, a 4th-year BSIT student at St. Paul University Surigao! 💻"
+    "I was proudly created by two IT developers: Marc Daryll Trinidad and Jade Mancio! 💻👨‍💻"
 ];
 
 // Easter egg fact index
