@@ -332,7 +332,7 @@ def _build_ollama_payload(messages):
             'top_p':          0.85,
             'top_k':          20,
             'repeat_penalty': 1.1,
-            'num_thread':     16,
+            'num_thread':     8,
             'stop':           ['</s>', 'User:'],
         },
     }
