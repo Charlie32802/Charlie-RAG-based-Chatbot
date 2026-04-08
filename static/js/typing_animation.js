@@ -110,21 +110,26 @@ function finalizeStreamedBubble(bubbleEl) {
 }
 
 // ── Typing indicator ──────────────────────────────────────────────────────────
-function showTypingIndicator() {
+function showTypingIndicator(mode = 'thinking') {
     const container = document.getElementById('messagesContainer');
     const div = document.createElement('div');
     div.className = 'typing-indicator';
     div.id = 'typingIndicator';
+    
+    const indicatorContent = mode === 'thinking' 
+        ? `<div class="thinking-text-container">Charlie is thinking <span class="typing-dots-inline" style="margin-left: 4px;"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>`
+        : `<div class="typing-dots-container">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+        </div>`;
+
     div.innerHTML = `
         <div class="message-avatar">
             <img src="/static/images/favicon.ico" alt="Charlie"
                  style="width:100%;height:100%;border-radius:50%;object-fit:cover;">
         </div>
-        <div class="typing-dots-container">
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-        </div>`;
+        ${indicatorContent}`;
     container.appendChild(div);
     scrollToBottom();
 }

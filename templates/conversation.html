@@ -77,12 +77,25 @@
           Share
         </button>
         <button class="delete-button" id="deleteButton">Delete Chat</button>
-        <textarea
-          class="chat-input"
-          id="chatInput"
-          placeholder="Type your message here..."
-          rows="1"
-        ></textarea>
+        <div class="chat-input-wrapper">
+          <textarea
+            class="chat-input"
+            id="chatInput"
+            placeholder="Type your message here..."
+            rows="1"
+          ></textarea>
+          <div class="custom-dropdown-container" id="modeDropdownContainer">
+            <input type="hidden" id="modeSelector" value="thinking">
+            <button type="button" class="custom-dropdown-btn" id="modeDropdownBtn" title="Default behavior with full context">
+              <span id="modeDropdownText">Thinking Mode</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="dropdown-icon"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+            <ul class="custom-dropdown-menu" id="modeDropdownMenu" style="display: none;">
+              <li class="custom-dropdown-item active" data-value="thinking" title="Default behavior with full context">Thinking Mode</li>
+              <li class="custom-dropdown-item" data-value="fast" title="Fast response with reduced context">Fast Mode</li>
+            </ul>
+          </div>
+        </div>
         <div class="action-buttons">
           <button class="send-button" id="sendButton">&#10148;</button>
           <button class="print-button" id="printButton" title="Print conversation">

@@ -95,7 +95,10 @@ async function sendMessage(message) {
     // Disable all edit buttons while Charlie is responding
     _disableAllEditButtons();
 
-    showTypingIndicator();
+    const modeSelect = document.getElementById('modeSelector');
+    const mode = modeSelect ? modeSelect.value : 'thinking';
+
+    showTypingIndicator(mode);
 
     let botMsgDiv       = null;
     let botBubble       = null;
@@ -122,7 +125,7 @@ async function sendMessage(message) {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': getCookie('csrftoken'),
             },
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, mode }),
             signal: controller.signal,
         });
 
@@ -276,7 +279,10 @@ async function sendAfterEdit(userMsgId) {
     // Disable all edit buttons while Charlie is responding
     _disableAllEditButtons();
 
-    showTypingIndicator();
+    const modeSelect = document.getElementById('modeSelector');
+    const mode = modeSelect ? modeSelect.value : 'thinking';
+
+    showTypingIndicator(mode);
 
     let botMsgDiv       = null;
     let botBubble       = null;
@@ -303,7 +309,7 @@ async function sendAfterEdit(userMsgId) {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': getCookie('csrftoken'),
             },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ mode }),
             signal: controller.signal,
         });
 

@@ -70,11 +70,62 @@ document.addEventListener('DOMContentLoaded', function () {
         messagesContainer.scrollTo({ top: 0, behavior: 'smooth' });
     });
 
-    // ── Initialize dark mode, search, page ─────────────────────────────────
+    // ── Initialize dark mode, search, mode dropdown, page ───────────────────
     initDarkMode();
     initSearch();
+    initModeDropdown();
     initializePage();
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MODE DROPDOWN
+// ══════════════════════════════════════════════════════════════════════════════
+function initModeDropdown() {
+    const btn = document.getElementById('modeDropdownBtn');
+    const menu = document.getElementById('modeDropdownMenu');
+    const textNode = document.getElementById('modeDropdownText');
+    const hiddenInput = document.getElementById('modeSelector');
+    const items = document.querySelectorAll('.custom-dropdown-item');
+
+    if (!btn || !menu || !hiddenInput) return;
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = menu.style.display === 'block';
+        menu.style.display = isOpen ? 'none' : 'block';
+        if (isOpen) {
+            btn.classList.remove('open');
+        } else {
+            btn.classList.add('open');
+        }
+    });
+
+    items.forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            items.forEach(i => i.classList.remove('active'));
+            item.classList.add('active');
+            
+            const val = item.getAttribute('data-value');
+            const txt = item.textContent;
+            const title = item.getAttribute('title');
+            
+            hiddenInput.value = val;
+            textNode.textContent = txt;
+            btn.setAttribute('title', title);
+            
+            menu.style.display = 'none';
+            btn.classList.remove('open');
+        });
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!btn.contains(e.target) && !menu.contains(e.target)) {
+            menu.style.display = 'none';
+            btn.classList.remove('open');
+        }
+    });
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DARK MODE

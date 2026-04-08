@@ -41,6 +41,14 @@ MAX_STORED_MESSAGES     = int(os.getenv('MAX_STORED_MESSAGES',     40))
 OLLAMA_TEMPERATURE      = float(os.getenv('OLLAMA_TEMPERATURE',    0.3))
 RAG_SEARCH_RESULTS      = int(os.getenv('RAG_SEARCH_RESULTS',      150))
 
+# ── Fast Mode overrides ───────────────────────────────────────────────────────
+FAST_MODE_RAG_SEARCH_RESULTS      = int(os.getenv('FAST_MODE_RAG_SEARCH_RESULTS',      15))
+FAST_MODE_MAX_HISTORY_MESSAGES    = int(os.getenv('FAST_MODE_MAX_HISTORY_MESSAGES',    3))
+FAST_MODE_MAX_HISTORY_CHARS       = int(os.getenv('FAST_MODE_MAX_HISTORY_CHARS',       1500))
+FAST_MODE_MAX_RESPONSE_TOKENS     = int(os.getenv('FAST_MODE_MAX_RESPONSE_TOKENS',     1024))
+FAST_MODE_OLLAMA_NUM_CTX          = int(os.getenv('FAST_MODE_OLLAMA_NUM_CTX',          8192))
+FAST_MODE_SAFE_TOTAL_PROMPT_CHARS = int(os.getenv('FAST_MODE_SAFE_TOTAL_PROMPT_CHARS', 30000))
+
 ERR_TIMEOUT    = "This is taking longer than expected. Please try again."
 ERR_CONNECTION = "I'm having trouble connecting. Please try again in a moment."
 ERR_GENERIC    = "Something went wrong. Please try again."
@@ -321,7 +329,24 @@ def _clean_response(text):
     return '\n'.join(pass2)
 
 
-def _build_ollama_payload(messages):
+def _build_ollama_payload(messages, mode='thinking'):
+    if mode == 'fast':
+        return {
+            'model':    OLLAMA_MODEL,
+            'messages': messages,
+            'options': {
+                'temperature':    0.4,
+                'num_predict':    FAST_MODE_MAX_RESPONSE_TOKENS,
+                'num_ctx':        FAST_MODE_OLLAMA_NUM_CTX,
+                'top_p':          0.9,
+                'top_k':          10,
+                'repeat_penalty': 1.05,
+                'num_thread':     8,
+                'num_batch':      256,
+                'stop':           ['</s>', 'User:'],
+            },
+        }
+
     return {
         'model':    OLLAMA_MODEL,
         'messages': messages,
@@ -349,17 +374,24 @@ def _validate_message(data):
     return user_message, None
 
 
-def build_conversation_history(db_messages):
+def build_conversation_history(db_messages, mode='thinking'):
+    if mode == 'fast':
+        max_msgs  = FAST_MODE_MAX_HISTORY_MESSAGES
+        max_chars = FAST_MODE_MAX_HISTORY_CHARS
+    else:
+        max_msgs  = MAX_HISTORY_MESSAGES
+        max_chars = MAX_HISTORY_CHARS
+
     history     = []
     total_chars = 0
 
-    for msg in db_messages[:MAX_HISTORY_MESSAGES]:
+    for msg in db_messages[:max_msgs]:
         content = msg.content
-        if total_chars + len(content) <= MAX_HISTORY_CHARS:
+        if total_chars + len(content) <= max_chars:
             history.append({'role': msg.role, 'content': content})
             total_chars += len(content)
         else:
-            space_left = MAX_HISTORY_CHARS - total_chars
+            space_left = max_chars - total_chars
             if space_left > 200:
                 history.append({'role': msg.role, 'content': content[:space_left] + '...'})
             break
@@ -518,15 +550,16 @@ async def get_or_create_session(request):
     return await _db_get_or_create_session(request.session.session_key)
 
 
-async def get_relevant_context(user_message):
+async def get_relevant_context(user_message, mode='thinking'):
     stats = await asyncio.to_thread(get_collection_stats)
     if not stats or stats.get('total_chunks', 0) == 0:
         logger.warning(f"RAG skipped — stats returned: {stats}")
         return '', [], 0
 
     try:
+        limit = FAST_MODE_RAG_SEARCH_RESULTS if mode == 'fast' else RAG_SEARCH_RESULTS
         context, item_count = await asyncio.to_thread(
-            search_documents, user_message, RAG_SEARCH_RESULTS
+            search_documents, user_message, limit
         )
         logger.info(f"RAG result loaded — length: {len(context)} chars")
         if not context:
@@ -538,12 +571,12 @@ async def get_relevant_context(user_message):
         return '', [], 0
 
 
-async def _prepare_chat_context(request, user_message):
+async def _prepare_chat_context(request, user_message, mode='thinking'):
     session = await get_or_create_session(request)
     _processing_sessions.add(session.session_key)
 
     db_messages = await _db_get_messages(session)
-    history     = build_conversation_history(db_messages)
+    history     = build_conversation_history(db_messages, mode)
 
     ph_time      = get_philippine_time()
     time_context = (
@@ -553,7 +586,7 @@ async def _prepare_chat_context(request, user_message):
 
     (tracking_context, tracking_hits), (rag_context, categories, item_count) = await asyncio.gather(
         _get_tracking_context_redis(user_message),
-        get_relevant_context(user_message),
+        get_relevant_context(user_message, mode),
     )
 
     if tracking_hits > 0:
@@ -578,11 +611,13 @@ async def _prepare_chat_context(request, user_message):
     messages    = [system_prompt] + history + [{'role': 'user', 'content': user_message}]
     total_chars = _total_chars(messages)
 
-    if total_chars > SAFE_TOTAL_PROMPT_CHARS:
+    safe_limit = FAST_MODE_SAFE_TOTAL_PROMPT_CHARS if mode == 'fast' else SAFE_TOTAL_PROMPT_CHARS
+
+    if total_chars > safe_limit:
         trimmed = list(history)
         while trimmed and _total_chars(
             [system_prompt] + trimmed + [{'role': 'user', 'content': user_message}]
-        ) > SAFE_TOTAL_PROMPT_CHARS:
+        ) > safe_limit:
             trimmed.pop(0)
 
         messages    = [system_prompt] + trimmed + [{'role': 'user', 'content': user_message}]
@@ -611,9 +646,9 @@ async def _prepare_chat_context(request, user_message):
     return {'session': session, 'messages': messages, 'categories': categories}
 
 
-async def call_ollama(messages):
+async def call_ollama(messages, mode='thinking'):
     try:
-        payload           = _build_ollama_payload(messages)
+        payload           = _build_ollama_payload(messages, mode)
         payload['stream'] = False
         async with httpx.AsyncClient(timeout=httpx.Timeout(OLLAMA_TIMEOUT)) as client:
             response = await client.post(
@@ -652,8 +687,10 @@ async def chat_stream_api(request):
         user_message, err = _validate_message(data)
         if err:
             return err
+            
+        mode = data.get('mode', 'thinking')
 
-        ctx        = await _prepare_chat_context(request, user_message)
+        ctx        = await _prepare_chat_context(request, user_message, mode)
         session    = ctx['session']
         categories = ctx.get('categories', [])
         messages   = ctx.get('messages', [])
@@ -678,7 +715,7 @@ async def chat_stream_api(request):
                     yield f"data: {json.dumps({'done': True, 'bot_message_id': bot_msg_id})}\n\n"
                     return
 
-                payload           = _build_ollama_payload(messages)
+                payload           = _build_ollama_payload(messages, mode)
                 payload['stream'] = True
                 url = f'http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat'
 
@@ -729,7 +766,7 @@ async def chat_stream_api(request):
     except Exception as e:
         logger.error(f"Stream chat setup error: {e}", exc_info=True)
         if session:
-            _processing_essions.discard(session.session_key)
+            _processing_sessions.discard(session.session_key)
         return JsonResponse({'error': ERR_GENERIC}, status=500)
 
 
@@ -746,8 +783,10 @@ async def chat_api(request):
         user_message, err = _validate_message(data)
         if err:
             return err
+            
+        mode = data.get('mode', 'thinking')
 
-        ctx        = await _prepare_chat_context(request, user_message)
+        ctx        = await _prepare_chat_context(request, user_message, mode)
         session    = ctx['session']
         categories = ctx.get('categories', [])
 
@@ -755,7 +794,7 @@ async def chat_api(request):
             bot_response = ctx['tracking_instant_response']
         else:
             messages     = ctx['messages']
-            bot_response = await call_ollama(messages)
+            bot_response = await call_ollama(messages, mode)
 
         user_msg_id, _ = await _db_save_message_exchange(session, user_message, bot_response, categories)
         return JsonResponse({'response': bot_response, 'status': 'success', 'user_message_id': user_msg_id})
@@ -847,6 +886,9 @@ async def regenerate_response_api(request):
         if not await _check_rate_limit(session_key):
             return JsonResponse({'error': ERR_RATE_LIMIT}, status=429)
 
+        data = json.loads(request.body) if request.body else {}
+        mode = data.get('mode', 'thinking')
+
         session = await get_or_create_session(request)
         _processing_sessions.add(session.session_key)
 
@@ -855,7 +897,7 @@ async def regenerate_response_api(request):
         if not user_message:
             return JsonResponse({'error': 'No message to regenerate'}, status=400)
 
-        history = build_conversation_history(history_msgs)
+        history = build_conversation_history(history_msgs, mode)
 
         ph_time      = get_philippine_time()
         time_context = (
@@ -865,7 +907,7 @@ async def regenerate_response_api(request):
 
         (tracking_context, tracking_hits), (rag_context, categories, item_count) = await asyncio.gather(
             _get_tracking_context_redis(user_message),
-            get_relevant_context(user_message),
+            get_relevant_context(user_message, mode),
         )
 
         system_prompt = get_system_prompt(
@@ -882,11 +924,13 @@ async def regenerate_response_api(request):
         messages    = [system_prompt] + history + [{'role': 'user', 'content': user_message}]
         total_chars = _total_chars(messages)
 
-        if total_chars > SAFE_TOTAL_PROMPT_CHARS:
+        safe_limit = FAST_MODE_SAFE_TOTAL_PROMPT_CHARS if mode == 'fast' else SAFE_TOTAL_PROMPT_CHARS
+
+        if total_chars > safe_limit:
             trimmed = list(history)
             while trimmed and _total_chars(
                 [system_prompt] + trimmed + [{'role': 'user', 'content': user_message}]
-            ) > SAFE_TOTAL_PROMPT_CHARS:
+            ) > safe_limit:
                 trimmed.pop(0)
             messages = [system_prompt] + trimmed + [{'role': 'user', 'content': user_message}]
 
@@ -914,7 +958,7 @@ async def regenerate_response_api(request):
                     yield f"data: {json.dumps({'done': True, 'bot_message_id': bot_msg_id})}\n\n"
                     return
 
-                payload           = _build_ollama_payload(messages)
+                payload           = _build_ollama_payload(messages, mode)
                 payload['stream'] = True
                 url = f'http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/chat'
 
